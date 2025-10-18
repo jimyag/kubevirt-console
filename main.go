@@ -12,18 +12,18 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"golang.org/x/term"
+	"k8s.io/client-go/tools/clientcmd"
 	"kubevirt.io/client-go/kubecli"
 	kvcorev1 "kubevirt.io/client-go/kubevirt/typed/core/v1"
 )
 
 var (
-	timeout    = pflag.Int("timeout", 10, "timeout in minutes")
-	namespace  = pflag.String("namespace", "", "namespace of the virtual machine instance")
-	vmiName    = pflag.String("vmi", "", "name of the virtual machine instance")
-	listenAddr = pflag.String("listen", ":8080", "address to serve the web console on")
-	webMode    = pflag.Bool("web", false, "serve the web console instead of attaching to the terminal")
+	timeout    time.Duration
+	namespace  string
+	listenAddr string
 )
 
 //go:embed web/* web/assets/*
@@ -33,38 +33,75 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
-func main() {
-	pflag.Parse()
-
-	clientConfig := kubecli.DefaultClientConfig(&pflag.FlagSet{})
-	client, err := clientConfig.ClientConfig()
-	if err != nil {
-		log.Fatalf("Error getting client config: %v", err)
-	}
-	virtClient, err := kubecli.GetKubevirtClientFromRESTConfig(client)
-	if err != nil {
-		log.Fatalf("cannot obtain KubeVirt client: %v\n", err)
-	}
-
-	if *webMode {
-		if err := runWebServer(virtClient, *listenAddr); err != nil {
-			log.Fatalf("web server exited with error: %v", err)
-		}
-		return
-	}
-
-	if *namespace == "" || *vmiName == "" {
-		log.Fatalf("--namespace and --vmi are required when running without --web")
-	}
-
-	err = handleConsoleConnection(virtClient, *namespace, *vmiName)
-	if err != nil {
-		log.Fatalf("Error connecting to console: %v", err)
-	}
-	fmt.Println("Console connected successfully")
+var rootCmd = &cobra.Command{
+	Use:           "kubevirt-console",
+	Short:         "Connect to KubeVirt VMI serial consoles",
+	Long:          "Connect to KubeVirt VirtualMachineInstance serial consoles from your terminal or an embedded web UI.",
+	SilenceErrors: false,
+	SilenceUsage:  true,
 }
 
-func handleConsoleConnection(client kubecli.KubevirtClient, namespace, vmi string) error {
+var consoleCmd = &cobra.Command{
+	Use:   "console [flags] <vmi>",
+	Short: "Attach to a VMI serial console in the terminal",
+	Args:  cobra.ExactArgs(1),
+	Example: `  kubevirt-console console --namespace demo test
+  kubevirt-console console -n demo test --timeout 5m
+  kubevirt-console console test # namespace inferred from kubeconfig`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		vmiName := args[0]
+		virtClient, defaultNamespace, err := newVirtClient()
+		if err != nil {
+			return err
+		}
+		ns := namespace
+		if ns == "" {
+			ns = defaultNamespace
+		}
+		if ns == "" {
+			return fmt.Errorf("namespace is required (pass --namespace or set one in your kubeconfig context)")
+		}
+		if err := handleConsoleConnection(virtClient, ns, vmiName, timeout); err != nil {
+			return fmt.Errorf("error connecting to console: %w", err)
+		}
+		fmt.Println("Console connected successfully")
+		return nil
+	},
+}
+
+var webCmd = &cobra.Command{
+	Use:   "web",
+	Short: "Serve the browser-based serial console",
+	Example: `  kubevirt-console web --listen :8080
+  kubevirt-console web --listen 127.0.0.1:8080 --timeout 5m`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		virtClient, defaultNamespace, err := newVirtClient()
+		if err != nil {
+			return err
+		}
+		return runWebServer(virtClient, listenAddr, timeout, defaultNamespace)
+	},
+}
+
+func init() {
+	timeout = 10 * time.Minute
+	rootCmd.PersistentFlags().DurationVar(&timeout, "timeout", timeout, "timeout for establishing the console connection (e.g. 10m)")
+
+	consoleCmd.Flags().StringVarP(&namespace, "namespace", "n", "", "namespace of the virtual machine instance")
+
+	webCmd.Flags().StringVar(&listenAddr, "listen", ":8080", "address to serve the web console on")
+
+	rootCmd.AddCommand(consoleCmd)
+	rootCmd.AddCommand(webCmd)
+}
+
+func main() {
+	if err := rootCmd.Execute(); err != nil {
+		os.Exit(1)
+	}
+}
+
+func handleConsoleConnection(client kubecli.KubevirtClient, namespace, vmi string, timeout time.Duration) error {
 	// in -> stdinWriter | stdinReader -> console
 	// out <- stdoutReader | stdoutWriter <- console
 	// Wait until the virtual machine is in running phase, user interrupt or timeout
@@ -78,7 +115,7 @@ func handleConsoleConnection(client kubecli.KubevirtClient, namespace, vmi strin
 
 	go func() {
 		con, err := client.VirtualMachineInstance(namespace).SerialConsole(vmi,
-			&kvcorev1.SerialConsoleOptions{ConnectionTimeout: time.Duration(*timeout) * time.Minute})
+			&kvcorev1.SerialConsoleOptions{ConnectionTimeout: timeout})
 		runningChan <- err
 
 		if err != nil {
@@ -195,7 +232,28 @@ func Attach(stdinReader, stdoutReader *io.PipeReader, stdinWriter, stdoutWriter 
 	return err
 }
 
-func runWebServer(client kubecli.KubevirtClient, addr string) error {
+func newVirtClient() (kubecli.KubevirtClient, string, error) {
+	fs := pflag.NewFlagSet("kubevirt-console", pflag.ContinueOnError)
+	clientConfig := kubecli.DefaultClientConfig(fs)
+	ns, _, err := clientConfig.Namespace()
+	if err != nil {
+		if !clientcmd.IsEmptyConfig(err) {
+			return nil, "", fmt.Errorf("error resolving namespace from kubeconfig: %w", err)
+		}
+		ns = ""
+	}
+	restConfig, err := clientConfig.ClientConfig()
+	if err != nil {
+		return nil, "", fmt.Errorf("error getting client config: %w", err)
+	}
+	virtClient, err := kubecli.GetKubevirtClientFromRESTConfig(restConfig)
+	if err != nil {
+		return nil, "", fmt.Errorf("cannot obtain KubeVirt client: %w", err)
+	}
+	return virtClient, ns, nil
+}
+
+func runWebServer(client kubecli.KubevirtClient, addr string, timeout time.Duration, defaultNamespace string) error {
 	contentFS, err := fs.Sub(webContent, "web")
 	if err != nil {
 		return fmt.Errorf("failed to load embedded web assets: %w", err)
@@ -203,7 +261,7 @@ func runWebServer(client kubecli.KubevirtClient, addr string) error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		handleWebsocket(client, w, r)
+		handleWebsocket(client, timeout, defaultNamespace, w, r)
 	})
 	mux.Handle("/", http.FileServer(http.FS(contentFS)))
 
@@ -211,8 +269,11 @@ func runWebServer(client kubecli.KubevirtClient, addr string) error {
 	return http.ListenAndServe(addr, mux)
 }
 
-func handleWebsocket(client kubecli.KubevirtClient, w http.ResponseWriter, r *http.Request) {
+func handleWebsocket(client kubecli.KubevirtClient, timeout time.Duration, defaultNamespace string, w http.ResponseWriter, r *http.Request) {
 	namespace := r.URL.Query().Get("namespace")
+	if namespace == "" {
+		namespace = defaultNamespace
+	}
 	vmi := r.URL.Query().Get("vmi")
 	if namespace == "" || vmi == "" {
 		http.Error(w, "namespace and vmi query parameters are required", http.StatusBadRequest)
@@ -235,7 +296,7 @@ func handleWebsocket(client kubecli.KubevirtClient, w http.ResponseWriter, r *ht
 
 	go func() {
 		console, err := client.VirtualMachineInstance(namespace).SerialConsole(vmi,
-			&kvcorev1.SerialConsoleOptions{ConnectionTimeout: time.Duration(*timeout) * time.Minute})
+			&kvcorev1.SerialConsoleOptions{ConnectionTimeout: timeout})
 		runningChan <- err
 		if err != nil {
 			return

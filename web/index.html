@@ -75,7 +75,7 @@
 	<div class="controls">
 		<form id="connect-form">
 			<label for="namespace">Namespace</label>
-			<input id="namespace" name="namespace" type="text" placeholder="Namespace" required>
+			<input id="namespace" name="namespace" type="text" placeholder="Namespace">
 			<label for="vmi">VMI</label>
 			<input id="vmi" name="vmi" type="text" placeholder="Virtual Machine Instance" required>
 			<button type="submit">Connect</button>
@@ -143,8 +143,9 @@
 				const loc = window.location;
 				const protocol = loc.protocol === 'https:' ? 'wss' : 'ws';
 				const endpoint = `${protocol}://${loc.host}/ws?namespace=${encodeURIComponent(namespace)}&vmi=${encodeURIComponent(vmi)}`;
-				console.log('connecting to websocket', endpoint);
-				updateStatus(`Connecting to ${namespace}/${vmi} ...`);
+			const nsLabel = namespace ? namespace : '(default namespace)';
+			console.log('connecting to websocket', endpoint);
+			updateStatus(`Connecting to ${nsLabel}/${vmi} ...`);
 				ws = new WebSocket(endpoint);
 				ws.binaryType = 'arraybuffer';
 
@@ -188,14 +189,14 @@
 
 			form.addEventListener('submit', function (event) {
 				event.preventDefault();
-				const ns = namespaceInput.value.trim();
-				const vmi = vmiInput.value.trim();
-				if (!ns || !vmi) {
-					updateStatus('Namespace and VMI are required');
-					return;
-				}
-				connect(ns, vmi);
-			});
+			const ns = namespaceInput.value.trim();
+			const vmi = vmiInput.value.trim();
+			if (!vmi) {
+				updateStatus('VMI is required');
+				return;
+			}
+			connect(ns, vmi);
+		});
 
 			term.onData(function (data) {
 				if (ws && ws.readyState === WebSocket.OPEN) {
@@ -207,12 +208,15 @@
 				fitAddon.fit();
 			});
 
-			if (initialNamespace && initialVMI) {
-				console.log('auto-connecting using URL parameters');
-				updateStatus('Preparing connection ...');
-				connect(initialNamespace, initialVMI);
-			}
-		})();
+	if (initialVMI) {
+		if (!initialNamespace && !namespaceInput.value) {
+			updateStatus('Using kubeconfig namespace');
+		}
+		console.log('auto-connecting using URL parameters');
+		updateStatus('Preparing connection ...');
+		connect(initialNamespace || namespaceInput.value, initialVMI);
+	}
+})();
 	</script>
 </body>
 

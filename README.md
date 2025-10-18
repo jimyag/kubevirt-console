@@ -21,20 +21,21 @@ go build -o kubevirt-console .
 Connect your local terminal to a VMI (similar to `virtctl console`):
 
 ```bash
-./kubevirt-console --namespace <namespace> --vmi <vmi-name>
+./kubevirt-console console [-n <namespace>] <vmi-name>
 ```
 
-Press `Ctrl+]` (escape sequence 29) to exit, or wait for the VMI to disconnect.
+If you omit `-n/--namespace`, the namespace from the active kubeconfig context is used. Press `Ctrl+]` (escape sequence 29) to exit, or wait for the VMI to disconnect.
 
 ## Web console mode
 
 Serve the embedded UI and access the console through the browser:
 
 ```bash
-./kubevirt-console --web --listen 127.0.0.1:8080
+./kubevirt-console web --listen 127.0.0.1:8080
 ```
 
 Visit `http://127.0.0.1:8080/`, fill in the namespace and VMI (or pass them via query parameters), and the page will stream the serial console over WebSocket.
+If you leave the namespace empty, the server falls back to the namespace from your kubeconfig context.
 
 ## Updating embedded web assets
 
