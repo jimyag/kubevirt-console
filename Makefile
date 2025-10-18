@@ -7,4 +7,4 @@ LDFLAGS := -s -w \
 
 .PHONY: build
 build:
-	go build -trimpath -v -ldflags "$(LDFLAGS)" -o kubevirt-console .
+	go build -trimpath -v -ldflags "$(LDFLAGS)" .

@@ -1,0 +1,96 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kubevirt-console
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kubevirt-console
+  namespace: kubevirt-console
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubevirt-console
+rules:
+  - apiGroups:
+      - "subresources.kubevirt.io"
+    resources:
+      - virtualmachineinstances/console
+    verbs:
+      - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubevirt-console
+subjects:
+  - kind: ServiceAccount
+    name: kubevirt-console
+    namespace: kubevirt-console
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubevirt-console
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kubevirt-console
+  namespace: kubevirt-console
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kubevirt-console
+  template:
+    metadata:
+      labels:
+        app: kubevirt-console
+    spec:
+      serviceAccountName: kubevirt-console
+      containers:
+        - name: kubevirt-console
+          image: ghcr.io/jimyag/kubevirt-console:latest
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          args:
+            - web
+            - --listen
+            - "0.0.0.0:8080"
+          ports:
+            - containerPort: 8080
+              name: web
+          readinessProbe:
+            httpGet:
+              path: /
+              port: web
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: web
+            initialDelaySeconds: 15
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kubevirt-console
+  namespace: kubevirt-console
+spec:
+  selector:
+    app: kubevirt-console
+  ports:
+    - port: 8080
+      targetPort: web
+      name: http
+  type: ClusterIP
