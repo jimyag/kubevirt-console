@@ -41,7 +41,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64v8 # https://github.com/docker-library/official-images#architectures-other-than-amd64
+          platforms: linux/amd64 # https://github.com/docker-library/official-images#architectures-other-than-amd64
           file: Dockerfile
           tags: ${{ env.REGISTRY }}/kubevirt-console:${{ steps.meta.outputs.git_tag }},${{ env.REGISTRY }}/kubevirt-console:latest
           push: true
