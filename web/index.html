@@ -39,6 +39,7 @@
 			flex-wrap: wrap;
 		}
 
+		.controls select,
 		.controls input {
 			padding: 0.35rem 0.6rem;
 			border-radius: 4px;
@@ -64,6 +65,10 @@
 			font-size: 0.9rem;
 			color: #c0c0c0;
 			min-width: 8rem;
+		}
+
+		.hidden {
+			display: none !important;
 		}
 
 		#status.status-success {
@@ -101,9 +106,9 @@
 	<div class="controls">
 		<form id="connect-form">
 			<label for="namespace">Namespace</label>
-			<input id="namespace" name="namespace" type="text" placeholder="Namespace">
+			<select id="namespace" name="namespace"></select>
 			<label for="vmi">VMI</label>
-			<input id="vmi" name="vmi" type="text" placeholder="Virtual Machine Instance" required>
+			<select id="vmi" name="vmi"></select>
 			<button type="submit">Connect</button>
 		</form>
 		<span id="status"></span>
@@ -117,9 +122,22 @@
 			const terminalContainer = document.getElementById('terminal');
 			const statusEl = document.getElementById('status');
 			const alertBanner = document.getElementById('alert-banner');
-			const namespaceInput = document.getElementById('namespace');
-			const vmiInput = document.getElementById('vmi');
+			const namespaceSelect = document.getElementById('namespace');
+			const vmiSelect = document.getElementById('vmi');
 			const form = document.getElementById('connect-form');
+			const params = new URLSearchParams(window.location.search);
+			const initialNamespaceParam = params.get('namespace') || '';
+			const initialVMIParam = params.get('vmi') || '';
+
+			const appState = {
+				mode: 'shared',
+				defaultNamespace: '',
+				initialNamespace: '',
+				fixedNamespace: '',
+				fixedVMI: '',
+				vmiIndex: new Map(),
+			};
+
 			const term = new Terminal({
 				convertEol: true,
 				cursorBlink: true,
@@ -137,18 +155,6 @@
 
 			let ws = null;
 			const decoder = new TextDecoder();
-			const params = new URLSearchParams(window.location.search);
-			const initialNamespace = params.get('namespace') || '';
-			const initialVMI = params.get('vmi') || '';
-			if (initialNamespace) {
-				namespaceInput.value = initialNamespace;
-			}
-			if (initialVMI) {
-				vmiInput.value = initialVMI;
-			}
-			namespaceInput.addEventListener('input', syncQueryFromInputs);
-			vmiInput.addEventListener('input', syncQueryFromInputs);
-			syncQueryFromInputs();
 
 			function updateStatus(text, level, detail) {
 				statusEl.textContent = text || '';
@@ -169,22 +175,21 @@
 			}
 
 			function updateQuery(namespace, vmi) {
-				const params = new URLSearchParams();
+				if (appState.mode !== 'shared') {
+					return;
+				}
+				const nextParams = new URLSearchParams();
 				if (namespace) {
-					params.set('namespace', namespace);
+					nextParams.set('namespace', namespace);
 				}
 				if (vmi) {
-					params.set('vmi', vmi);
+					nextParams.set('vmi', vmi);
 				}
-				const next = params.toString();
+				const next = nextParams.toString();
 				const nextUrl = `${window.location.pathname}${next ? `?${next}` : ''}`;
 				if (nextUrl !== window.location.pathname + window.location.search) {
 					history.replaceState(null, '', nextUrl);
 				}
-			}
-
-			function syncQueryFromInputs() {
-				updateQuery(namespaceInput.value.trim(), vmiInput.value.trim());
 			}
 
 			function closeSocket() {
@@ -202,20 +207,92 @@
 				}
 			}
 
+			function renderNamespaceOptions(namespaces) {
+				namespaceSelect.textContent = '';
+				namespaces.forEach(ns => {
+					const option = document.createElement('option');
+					option.value = ns;
+					option.textContent = ns;
+					namespaceSelect.appendChild(option);
+				});
+			}
+
+			function renderVmiOptions(filterNamespace) {
+				vmiSelect.textContent = '';
+				const entries = [];
+				if (filterNamespace && appState.vmiIndex.has(filterNamespace)) {
+					appState.vmiIndex.get(filterNamespace).forEach(name => {
+						entries.push({ namespace: filterNamespace, name });
+					});
+				} else {
+					appState.vmiIndex.forEach((names, ns) => {
+						names.forEach(name => entries.push({ namespace: ns, name }));
+					});
+				}
+				entries.sort((a, b) => {
+					if (a.namespace === b.namespace) {
+						return a.name.localeCompare(b.name);
+					}
+					return a.namespace.localeCompare(b.namespace);
+				});
+				entries.forEach(entry => {
+					const option = document.createElement('option');
+					option.value = entry.name;
+					option.textContent = `${entry.namespace}/${entry.name}`;
+					option.dataset.namespace = entry.namespace;
+					vmiSelect.appendChild(option);
+				});
+			}
+
+			function findNamespaceForVmi(vmiName) {
+				const options = vmiSelect.options;
+				for (let i = 0; i < options.length; i++) {
+					if (options[i].value === vmiName) {
+						return options[i].dataset.namespace || '';
+					}
+				}
+				return '';
+			}
+
 			function connect(namespace, vmi) {
+				const selectedOption = vmiSelect.options[vmiSelect.selectedIndex];
+				const resolvedVMI = selectedOption ? selectedOption.value : (vmi || '').trim();
+				if (!resolvedVMI) {
+					updateStatus('VMI is required', 'error');
+					return;
+				}
+				let resolvedNamespace = namespace ? namespace.trim() : '';
+				if (appState.mode === 'dedicated') {
+					resolvedNamespace = appState.fixedNamespace || appState.defaultNamespace || resolvedNamespace;
+				} else {
+					if (!resolvedNamespace) {
+						const nsOption = namespaceSelect.options[namespaceSelect.selectedIndex];
+						if (nsOption) {
+							resolvedNamespace = nsOption.value;
+						}
+					}
+					if (!resolvedNamespace) {
+						resolvedNamespace = findNamespaceForVmi(resolvedVMI) || appState.initialNamespace || appState.defaultNamespace || '';
+					}
+				}
+				if (!resolvedNamespace) {
+					updateStatus('Namespace is required', 'error');
+					return;
+				}
+
 				closeSocket();
 				const loc = window.location;
 				const protocol = loc.protocol === 'https:' ? 'wss' : 'ws';
 				const wsParams = new URLSearchParams();
-				if (namespace) {
-					wsParams.set('namespace', namespace);
-				}
-				wsParams.set('vmi', vmi);
+				wsParams.set('namespace', resolvedNamespace);
+				wsParams.set('vmi', resolvedVMI);
 				const endpoint = `${protocol}://${loc.host}/ws?${wsParams.toString()}`;
-				const nsLabel = namespace ? namespace : '(default namespace)';
-				updateQuery(namespace, vmi);
+				const nsLabel = resolvedNamespace ? resolvedNamespace : '(default namespace)';
+				if (appState.mode === 'shared') {
+					updateQuery(resolvedNamespace, resolvedVMI);
+				}
 				console.log('connecting to websocket', endpoint);
-				updateStatus(`Connecting to ${nsLabel}/${vmi} ...`);
+				updateStatus(`Connecting to ${nsLabel}/${resolvedVMI} ...`);
 				ws = new WebSocket(endpoint);
 				ws.binaryType = 'arraybuffer';
 
@@ -254,15 +331,133 @@
 				};
 			}
 
+			function loadVmis() {
+				updateStatus('Loading VMIs ...');
+				return fetch('/api/vmis')
+					.then(response => {
+						if (!response.ok) {
+							throw new Error(`HTTP ${response.status}`);
+						}
+						return response.json();
+					})
+					.then(data => {
+						const namespaceSet = new Set();
+						const vmiMap = new Map();
+						data.forEach(item => {
+							const ns = item.namespace || '';
+							const name = item.name || '';
+							if (!name) {
+								return;
+							}
+							namespaceSet.add(ns);
+							if (!vmiMap.has(ns)) {
+								vmiMap.set(ns, new Set());
+							}
+							vmiMap.get(ns).add(name);
+						});
+						appState.vmiIndex = vmiMap;
+						const sortedNamespaces = Array.from(namespaceSet).sort();
+						renderNamespaceOptions(sortedNamespaces);
+						let nsValue = namespaceSelect.value;
+						if (appState.mode === 'shared') {
+							if (!nsValue || !namespaceSet.has(nsValue)) {
+								nsValue = initialNamespaceParam || appState.initialNamespace || sortedNamespaces[0] || '';
+								namespaceSelect.value = nsValue;
+							}
+							renderVmiOptions(nsValue);
+							if (initialVMIParam && vmiSelect.querySelector(`option[value="${initialVMIParam}"]`)) {
+								vmiSelect.value = initialVMIParam;
+							}
+						}
+						updateStatus('Ready');
+					})
+					.catch(err => {
+						updateStatus('Failed to load VMIs', 'error', err.message || String(err));
+					});
+			}
+
+			function initializeDedicatedMode(config) {
+				const ns = config.fixedNamespace || config.defaultNamespace || '';
+				namespaceSelect.innerHTML = '';
+				const nsOption = document.createElement('option');
+				nsOption.value = ns;
+				nsOption.textContent = ns;
+				namespaceSelect.appendChild(nsOption);
+				namespaceSelect.disabled = true;
+
+				vmiSelect.innerHTML = '';
+				const vmiOption = document.createElement('option');
+				vmiOption.value = config.fixedVmi;
+				vmiOption.textContent = config.fixedVmi;
+				vmiOption.dataset.namespace = ns;
+				vmiSelect.appendChild(vmiOption);
+				vmiSelect.disabled = true;
+
+				form.classList.add('hidden');
+				updateStatus('Preparing connection ...');
+				connect(ns, config.fixedVmi);
+			}
+
+			function initializeSharedMode(config) {
+				form.classList.remove('hidden');
+				namespaceSelect.disabled = false;
+				vmiSelect.disabled = false;
+				namespaceSelect.addEventListener('change', () => {
+					renderVmiOptions(namespaceSelect.value);
+					if (appState.mode === 'shared') {
+						updateQuery(namespaceSelect.value, vmiSelect.value);
+					}
+				});
+				vmiSelect.addEventListener('change', () => {
+					if (appState.mode === 'shared') {
+						updateQuery(namespaceSelect.value, vmiSelect.value);
+					}
+				});
+				loadVmis().then(() => {
+					if (initialNamespaceParam) {
+						namespaceSelect.value = initialNamespaceParam;
+						renderVmiOptions(initialNamespaceParam);
+					}
+					if (initialVMIParam && vmiSelect.querySelector(`option[value="${initialVMIParam}"]`)) {
+						vmiSelect.value = initialVMIParam;
+					}
+					if (initialVMIParam) {
+						console.log('auto-connecting using URL parameters');
+						updateStatus('Preparing connection ...');
+						connect(namespaceSelect.value, initialVMIParam);
+					}
+				});
+			}
+
+			function initialize() {
+				fetch('/api/config')
+					.then(response => {
+						if (!response.ok) {
+							throw new Error(`HTTP ${response.status}`);
+						}
+						return response.json();
+					})
+					.then(config => {
+						appState.mode = config.mode || 'shared';
+						appState.defaultNamespace = config.defaultNamespace || '';
+						appState.initialNamespace = config.initialNamespace || appState.defaultNamespace || '';
+						appState.fixedNamespace = config.fixedNamespace || '';
+						appState.fixedVMI = config.fixedVmi || '';
+
+						if (appState.mode === 'dedicated') {
+							initializeDedicatedMode(config);
+						} else {
+							initializeSharedMode(config);
+						}
+					})
+					.catch(err => {
+						updateStatus('Failed to load console config', 'error', err.message || String(err));
+					});
+			}
+
 			form.addEventListener('submit', function (event) {
 				event.preventDefault();
-				const ns = namespaceInput.value.trim();
-				const vmi = vmiInput.value.trim();
-				if (!vmi) {
-					updateStatus('VMI is required', 'error');
-					return;
-				}
-				connect(ns, vmi);
+				connect(namespaceSelect.value, vmiSelect.value);
 			});
 
 			term.onData(function (data) {
@@ -275,16 +470,8 @@
 				fitAddon.fit();
 			});
 
-			if (initialVMI) {
-				if (!initialNamespace && !namespaceInput.value) {
-					updateStatus('Using kubeconfig namespace');
-				}
-				console.log('auto-connecting using URL parameters');
-				updateStatus('Preparing connection ...');
-				connect(initialNamespace || namespaceInput.value, initialVMI);
-			}
-		}
-		)();
+			initialize();
+		})();
 	</script>
 </body>
 

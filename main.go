@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -16,15 +18,18 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"golang.org/x/term"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/clientcmd"
 	"kubevirt.io/client-go/kubecli"
 	kvcorev1 "kubevirt.io/client-go/kubevirt/typed/core/v1"
 )
 
 var (
-	timeout    time.Duration
-	namespace  string
-	listenAddr string
+	timeout          time.Duration
+	namespace        string
+	listenAddr       string
+	webNamespaceFlag string
+	webVMIFlag       string
 )
 
 //go:embed web/* web/assets/*
@@ -75,13 +80,25 @@ var webCmd = &cobra.Command{
 	Use:   "web",
 	Short: "Serve the browser-based serial console",
 	Example: `  kubevirt-console web --listen :8080
-  kubevirt-console web --listen 127.0.0.1:8080 --timeout 5m`,
+  kubevirt-console web --listen 127.0.0.1:8080 --timeout 5m
+  kubevirt-console web --namespace prod --vmi vm-01 # dedicated console`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		virtClient, defaultNamespace, err := newVirtClient()
 		if err != nil {
 			return err
 		}
-		return runWebServer(virtClient, listenAddr, timeout, defaultNamespace)
+		initialNamespace := webNamespaceFlag
+		if initialNamespace == "" {
+			initialNamespace = defaultNamespace
+		}
+		fixedNamespace := ""
+		if webVMIFlag != "" {
+			if initialNamespace == "" {
+				return fmt.Errorf("namespace is required when --vmi is specified and no default namespace is available")
+			}
+			fixedNamespace = initialNamespace
+		}
+		return runWebServer(virtClient, listenAddr, timeout, defaultNamespace, initialNamespace, fixedNamespace, webVMIFlag)
 	},
 }
 
@@ -92,6 +109,8 @@ func init() {
 	consoleCmd.Flags().StringVarP(&namespace, "namespace", "n", "", "namespace of the virtual machine instance")
 
 	webCmd.Flags().StringVar(&listenAddr, "listen", "127.0.0.1:8080", "address to serve the web console on")
+	webCmd.Flags().StringVar(&webNamespaceFlag, "namespace", "", "default namespace for the web console (defaults to kubeconfig namespace)")
+	webCmd.Flags().StringVar(&webVMIFlag, "vmi", "", "serve a dedicated console for the specified VMI")
 
 	rootCmd.AddCommand(consoleCmd)
 	rootCmd.AddCommand(webCmd)
@@ -255,30 +274,84 @@ func newVirtClient() (kubecli.KubevirtClient, string, error) {
 	return virtClient, ns, nil
 }
 
-func runWebServer(client kubecli.KubevirtClient, addr string, timeout time.Duration, defaultNamespace string) error {
+type webServer struct {
+	client           kubecli.KubevirtClient
+	timeout          time.Duration
+	defaultNamespace string
+	initialNamespace string
+	fixedNamespace   string
+	fixedVMI         string
+}
+
+func runWebServer(client kubecli.KubevirtClient, addr string, timeout time.Duration, defaultNamespace, initialNamespace, fixedNamespace, fixedVMI string) error {
 	contentFS, err := fs.Sub(webContent, "web")
 	if err != nil {
 		return fmt.Errorf("failed to load embedded web assets: %w", err)
 	}
 
+	if initialNamespace == "" {
+		initialNamespace = defaultNamespace
+	}
+
+	server := &webServer{
+		client:           client,
+		timeout:          timeout,
+		defaultNamespace: defaultNamespace,
+		initialNamespace: initialNamespace,
+		fixedNamespace:   fixedNamespace,
+		fixedVMI:         fixedVMI,
+	}
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		handleWebsocket(client, timeout, defaultNamespace, w, r)
-	})
+	mux.HandleFunc("/ws", server.handleWebsocket)
+	mux.HandleFunc("/api/config", server.handleConfig)
+	mux.HandleFunc("/api/vmis", server.handleVMIs)
 	mux.Handle("/", http.FileServer(http.FS(contentFS)))
 
-	log.Printf("Serving web console at http://%s/", addr)
+	log.Printf("Serving web console at http://%s/ (mode=%s)", addr, server.mode())
 	return http.ListenAndServe(addr, mux)
 }
 
-func handleWebsocket(client kubecli.KubevirtClient, timeout time.Duration, defaultNamespace string, w http.ResponseWriter, r *http.Request) {
-	namespace := r.URL.Query().Get("namespace")
-	if namespace == "" {
-		namespace = defaultNamespace
+func (s *webServer) mode() string {
+	if s.fixedVMI != "" {
+		return "dedicated"
 	}
-	vmi := r.URL.Query().Get("vmi")
-	if namespace == "" || vmi == "" {
-		http.Error(w, "namespace and vmi query parameters are required", http.StatusBadRequest)
+	return "shared"
+}
+
+func (s *webServer) resolvedNamespace(requested string) string {
+	if s.fixedVMI != "" {
+		if s.fixedNamespace != "" {
+			return s.fixedNamespace
+		}
+		return s.defaultNamespace
+	}
+	if requested != "" {
+		return requested
+	}
+	if s.initialNamespace != "" {
+		return s.initialNamespace
+	}
+	return s.defaultNamespace
+}
+
+func (s *webServer) handleWebsocket(w http.ResponseWriter, r *http.Request) {
+	namespace := strings.TrimSpace(r.URL.Query().Get("namespace"))
+	vmi := strings.TrimSpace(r.URL.Query().Get("vmi"))
+
+	if s.fixedVMI != "" {
+		namespace = s.resolvedNamespace("")
+		vmi = s.fixedVMI
+	} else {
+		if vmi == "" {
+			http.Error(w, "vmi query parameter is required", http.StatusBadRequest)
+			return
+		}
+		namespace = s.resolvedNamespace(namespace)
+	}
+
+	if namespace == "" {
+		http.Error(w, "namespace cannot be determined", http.StatusBadRequest)
 		return
 	}
 
@@ -297,8 +370,8 @@ func handleWebsocket(client kubecli.KubevirtClient, timeout time.Duration, defau
 	runningChan := make(chan error, 1)
 
 	go func() {
-		console, err := client.VirtualMachineInstance(namespace).SerialConsole(vmi,
-			&kvcorev1.SerialConsoleOptions{ConnectionTimeout: timeout})
+		console, err := s.client.VirtualMachineInstance(namespace).SerialConsole(vmi,
+			&kvcorev1.SerialConsoleOptions{ConnectionTimeout: s.timeout})
 		runningChan <- err
 		if err != nil {
 			return
@@ -317,6 +390,9 @@ func handleWebsocket(client kubecli.KubevirtClient, timeout time.Duration, defau
 	}
 	log.Printf("serial console stream established for %s/%s", namespace, vmi)
 	_ = conn.WriteMessage(websocket.TextMessage, []byte("serial console ready"))
+	if _, err := stdinWriter.Write([]byte("\r")); err != nil {
+		log.Printf("failed to send initial newline to console: %v", err)
+	}
 
 	writeErr := make(chan error, 1)
 	readErr := make(chan error, 1)
@@ -385,4 +461,80 @@ func handleWebsocket(client kubecli.KubevirtClient, timeout time.Duration, defau
 	_ = stdinReader.Close()
 	_ = stdoutReader.Close()
 	log.Printf("websocket disconnected: namespace=%s vmi=%s", namespace, vmi)
+}
+
+func (s *webServer) handleConfig(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	response := struct {
+		Mode             string `json:"mode"`
+		DefaultNamespace string `json:"defaultNamespace,omitempty"`
+		InitialNamespace string `json:"initialNamespace,omitempty"`
+		FixedNamespace   string `json:"fixedNamespace,omitempty"`
+		FixedVMI         string `json:"fixedVmi,omitempty"`
+	}{
+		Mode:             s.mode(),
+		DefaultNamespace: s.defaultNamespace,
+		InitialNamespace: s.initialNamespace,
+		FixedNamespace:   s.fixedNamespace,
+		FixedVMI:         s.fixedVMI,
+	}
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("failed to write config response: %v", err)
+	}
+}
+
+func (s *webServer) handleVMIs(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if s.fixedVMI != "" {
+		ns := s.resolvedNamespace("")
+		vmi := s.fixedVMI
+		if ns == "" {
+			http.Error(w, "namespace cannot be determined", http.StatusBadRequest)
+			return
+		}
+		list := []map[string]string{
+			{
+				"namespace": ns,
+				"name":      vmi,
+			},
+		}
+		if err := json.NewEncoder(w).Encode(list); err != nil {
+			log.Printf("failed to write dedicated vmi response: %v", err)
+		}
+		return
+	}
+
+	nsParam := strings.TrimSpace(r.URL.Query().Get("namespace"))
+	targetNamespace := nsParam
+	if targetNamespace == "" || strings.EqualFold(targetNamespace, "all") {
+		targetNamespace = metav1.NamespaceAll
+	}
+
+	ctx := r.Context()
+	vmiClient := s.client.VirtualMachineInstance(targetNamespace)
+	list, err := vmiClient.List(ctx, metav1.ListOptions{})
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to list VMIs: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	type vmiInfo struct {
+		Namespace string `json:"namespace"`
+		Name      string `json:"name"`
+		Phase     string `json:"phase,omitempty"`
+	}
+
+	result := make([]vmiInfo, 0, len(list.Items))
+	for _, item := range list.Items {
+		result = append(result, vmiInfo{
+			Namespace: item.Namespace,
+			Name:      item.Name,
+			Phase:     string(item.Status.Phase),
+		})
+	}
+
+	if err := json.NewEncoder(w).Encode(result); err != nil {
+		log.Printf("failed to write vmi list response: %v", err)
+	}
 }
