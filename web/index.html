@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="utf-8">
+	<title>KubeVirt VMI Serial Console</title>
+	<link rel="stylesheet" href="assets/xterm.min.css">
+	<style>
+		html,
+		body {
+			height: 100%;
+			margin: 0;
+			background: #1b1b1b;
+			color: #f5f5f5;
+			font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+		}
+
+		body {
+			display: flex;
+			flex-direction: column;
+		}
+
+		.controls {
+			display: flex;
+			align-items: center;
+			gap: 0.5rem;
+			padding: 0.75rem 1rem;
+			background: #111;
+			box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+			z-index: 1;
+		}
+
+		.controls form {
+			display: flex;
+			align-items: center;
+			gap: 0.5rem;
+			margin: 0;
+		}
+
+		.controls input {
+			padding: 0.35rem 0.6rem;
+			border-radius: 4px;
+			border: 1px solid #2f2f2f;
+			background: #1f1f1f;
+			color: #f5f5f5;
+		}
+
+		.controls button {
+			padding: 0.35rem 0.9rem;
+			border-radius: 4px;
+			border: none;
+			background: #0078d4;
+			color: #fff;
+			cursor: pointer;
+		}
+
+		.controls button:hover {
+			background: #1f90f6;
+		}
+
+		#status {
+			font-size: 0.9rem;
+			color: #c0c0c0;
+			min-width: 8rem;
+		}
+
+		#terminal {
+			flex: 1;
+			padding: 0.5rem;
+		}
+	</style>
+</head>
+
+<body>
+	<div class="controls">
+		<form id="connect-form">
+			<label for="namespace">Namespace</label>
+			<input id="namespace" name="namespace" type="text" placeholder="Namespace" required>
+			<label for="vmi">VMI</label>
+			<input id="vmi" name="vmi" type="text" placeholder="Virtual Machine Instance" required>
+			<button type="submit">Connect</button>
+		</form>
+		<span id="status"></span>
+	</div>
+	<div id="terminal"></div>
+	<script src="assets/xterm.min.js"></script>
+	<script src="assets/xterm-addon-fit.min.js"></script>
+	<script>
+		(function () {
+			const terminalContainer = document.getElementById('terminal');
+			const statusEl = document.getElementById('status');
+			const namespaceInput = document.getElementById('namespace');
+			const vmiInput = document.getElementById('vmi');
+			const form = document.getElementById('connect-form');
+			const term = new Terminal({
+				convertEol: true,
+				cursorBlink: true,
+				disableStdin: false,
+				fontFamily: 'Menlo, Consolas, "Liberation Mono", monospace',
+				theme: {
+					background: '#1b1b1b'
+				}
+			});
+			const fitAddon = new FitAddon.FitAddon();
+			term.loadAddon(fitAddon);
+			term.open(terminalContainer);
+			fitAddon.fit();
+			term.focus();
+
+			let ws = null;
+			const decoder = new TextDecoder();
+			const params = new URLSearchParams(window.location.search);
+			const initialNamespace = params.get('namespace') || '';
+			const initialVMI = params.get('vmi') || '';
+			if (initialNamespace) {
+				namespaceInput.value = initialNamespace;
+			}
+			if (initialVMI) {
+				vmiInput.value = initialVMI;
+			}
+
+			function updateStatus(text) {
+				statusEl.textContent = text || '';
+			}
+
+			function closeSocket() {
+				if (ws) {
+					ws.onopen = null;
+					ws.onclose = null;
+					ws.onerror = null;
+					ws.onmessage = null;
+					try {
+						ws.close();
+					} catch (err) {
+						console.warn('error closing websocket', err);
+					}
+					ws = null;
+				}
+			}
+
+			function connect(namespace, vmi) {
+				closeSocket();
+				const loc = window.location;
+				const protocol = loc.protocol === 'https:' ? 'wss' : 'ws';
+				const endpoint = `${protocol}://${loc.host}/ws?namespace=${encodeURIComponent(namespace)}&vmi=${encodeURIComponent(vmi)}`;
+				console.log('connecting to websocket', endpoint);
+				updateStatus(`Connecting to ${namespace}/${vmi} ...`);
+				ws = new WebSocket(endpoint);
+				ws.binaryType = 'arraybuffer';
+
+				ws.onopen = function () {
+					console.log('websocket open');
+					term.clear();
+					fitAddon.fit();
+					updateStatus('Connected');
+					term.focus();
+				};
+
+				ws.onmessage = function (event) {
+					if (event.data instanceof ArrayBuffer) {
+						// no logging to avoid noise
+					} else {
+						console.log('message', event.data);
+					}
+					if (event.data instanceof ArrayBuffer) {
+						term.write(decoder.decode(event.data));
+					} else if (typeof event.data === 'string') {
+						if (event.data === 'serial console ready') {
+							updateStatus('Connected');
+						} else if (event.data.startsWith('serial console error:') || event.data.startsWith('console ')) {
+							updateStatus(event.data);
+						} else {
+							term.write(event.data);
+						}
+					}
+				};
+
+				ws.onerror = function (event) {
+					console.error('websocket error', event);
+					updateStatus('Connection error');
+				};
+
+				ws.onclose = function (event) {
+					console.log('websocket closed', event);
+					updateStatus(event.wasClean ? 'Connection closed' : 'Connection lost');
+				};
+			}
+
+			form.addEventListener('submit', function (event) {
+				event.preventDefault();
+				const ns = namespaceInput.value.trim();
+				const vmi = vmiInput.value.trim();
+				if (!ns || !vmi) {
+					updateStatus('Namespace and VMI are required');
+					return;
+				}
+				connect(ns, vmi);
+			});
+
+			term.onData(function (data) {
+				if (ws && ws.readyState === WebSocket.OPEN) {
+					ws.send(data);
+				}
+			});
+
+			window.addEventListener('resize', function () {
+				fitAddon.fit();
+			});
+
+			if (initialNamespace && initialVMI) {
+				console.log('auto-connecting using URL parameters');
+				updateStatus('Preparing connection ...');
+				connect(initialNamespace, initialVMI);
+			}
+		})();
+	</script>
+</body>
+
+</html>
