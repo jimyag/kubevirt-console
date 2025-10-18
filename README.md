@@ -26,6 +26,8 @@ Connect your local terminal to a VMI (similar to `virtctl console`):
 
 If you omit `-n/--namespace`, the namespace from the active kubeconfig context is used. Press `Ctrl+]` (escape sequence 29) to exit, or wait for the VMI to disconnect.
 
+![Console mode screenshot](images/console.png)
+
 ## Web console mode
 
 Serve the embedded UI and access the console through the browser:
@@ -35,6 +37,10 @@ Serve the embedded UI and access the console through the browser:
 ```
 
 Visit `http://127.0.0.1:8080/` and fill in the namespace and VMI. The page automatically syncs those fields into the URL (so you can bookmark/share the link) and streams the serial console over WebSocket. If you leave the namespace empty, the server falls back to the namespace from your kubeconfig context. Terminal output includes connection status, and any errors are highlighted next to the Connect button.
+
+![Web console screenshot](images/web.png)
+
+![Web console error screenshot](images/web-error.png)
 
 ## Updating embedded web assets
 

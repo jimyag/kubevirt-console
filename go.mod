@@ -4,23 +4,21 @@ go 1.25
 
 require (
 	github.com/spf13/pflag v1.0.10
-	k8s.io/api v0.32.5 // indirect
-	k8s.io/client-go v0.32.5 // indirect
+	k8s.io/client-go v0.32.5
 	kubevirt.io/client-go v1.6.2
-)
-
-replace (
-	github.com/openshift/api => github.com/openshift/api v0.0.0-20210105115604-44119421ec6b
-	k8s.io/kube-openapi => k8s.io/kube-openapi v0.0.0-20240430033511-f0e62f92d13f
-)
-
-require (
 	github.com/gorilla/websocket v1.5.0
 	github.com/spf13/cobra v1.10.1
 	golang.org/x/term v0.30.0
 )
 
+replace (
+	// copy from https://github.com/kubevirt/client-go/blob/0c98b294218fe584ebdead8ed9577f85d919634a/go.mod#L73-L77
+	github.com/openshift/api => github.com/openshift/api v0.0.0-20210105115604-44119421ec6b
+	k8s.io/kube-openapi => k8s.io/kube-openapi v0.0.0-20240430033511-f0e62f92d13f
+)
+
 require (
+	k8s.io/api v0.32.5 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/emicklei/go-restful/v3 v3.11.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.7.0 // indirect
