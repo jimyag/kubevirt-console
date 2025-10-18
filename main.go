@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/jimmicro/version"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"golang.org/x/term"
@@ -39,6 +40,7 @@ var rootCmd = &cobra.Command{
 	Long:          "Connect to KubeVirt VirtualMachineInstance serial consoles from your terminal or an embedded web UI.",
 	SilenceErrors: false,
 	SilenceUsage:  true,
+	Version:       version.Version(),
 }
 
 var consoleCmd = &cobra.Command{
