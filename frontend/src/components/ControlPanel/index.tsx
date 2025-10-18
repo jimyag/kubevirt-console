@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Select, Input, Button, Space, message, Row, Col } from 'antd';
-import { SearchOutlined, ReloadOutlined } from '@ant-design/icons';
+import { Select, Button, Space, message, Row, Col } from 'antd';
+import { ReloadOutlined } from '@ant-design/icons';
 import { useConsoleStore } from '../../store/consoleStore';
 import { apiService } from '../../services/api';
 
@@ -20,8 +20,6 @@ export const ControlPanel: React.FC = () => {
         connect
     } = useConsoleStore();
 
-    const [namespaceSearch, setNamespaceSearch] = useState('');
-    const [vmiSearch, setVmiSearch] = useState('');
     const [loading, setLoading] = useState(false);
 
     // 加载 VMI 列表
@@ -47,13 +45,9 @@ export const ControlPanel: React.FC = () => {
         loadVMIs();
     }, []);
 
-    // 过滤 VMI 列表
+    // 过滤 VMI 列表（基于选中的命名空间）
     const filteredVMIs = vmiList.filter(vmi => {
-        const matchesNamespace = !selectedNamespace || selectedNamespace === '__ALL__' || vmi.namespace === selectedNamespace;
-        const matchesSearch = !vmiSearch ||
-            vmi.name.toLowerCase().includes(vmiSearch.toLowerCase()) ||
-            vmi.namespace.toLowerCase().includes(vmiSearch.toLowerCase());
-        return matchesNamespace && matchesSearch;
+        return !selectedNamespace || selectedNamespace === '__ALL__' || vmi.namespace === selectedNamespace;
     });
 
     // 处理连接
@@ -92,31 +86,20 @@ export const ControlPanel: React.FC = () => {
                         }}>
                             Namespace
                         </label>
-                        <Space.Compact style={{ width: '100%' }}>
-                            <Input
-                                placeholder="Filter namespaces..."
-                                value={namespaceSearch}
-                                onChange={(e) => setNamespaceSearch(e.target.value)}
-                                prefix={<SearchOutlined style={{ fontSize: '12px' }} />}
-                                style={{ width: '35%', fontSize: '12px' }}
-                                size="small"
-                            />
-                            <Select
-                                value={selectedNamespace}
-                                onChange={setSelectedNamespace}
-                                style={{ width: '65%' }}
-                                placeholder="Select namespace"
-                                size="small"
-                                showSearch
-                            >
-                                <Option value="__ALL__">All namespaces</Option>
-                                {namespaces
-                                    .filter(ns => !namespaceSearch || ns.toLowerCase().includes(namespaceSearch.toLowerCase()))
-                                    .map(ns => (
-                                        <Option key={ns} value={ns}>{ns}</Option>
-                                    ))}
-                            </Select>
-                        </Space.Compact>
+                        <Select
+                            value={selectedNamespace}
+                            onChange={setSelectedNamespace}
+                            style={{ width: '100%' }}
+                            placeholder="Search and select namespace"
+                            size="small"
+                            showSearch
+                            optionFilterProp="children"
+                        >
+                            <Option value="__ALL__">All namespaces</Option>
+                            {namespaces.map(ns => (
+                                <Option key={ns} value={ns}>{ns}</Option>
+                            ))}
+                        </Select>
                     </div>
                 </Col>
 
@@ -132,31 +115,22 @@ export const ControlPanel: React.FC = () => {
                         }}>
                             VMI
                         </label>
-                        <Space.Compact style={{ width: '100%' }}>
-                            <Input
-                                placeholder="Filter VMIs..."
-                                value={vmiSearch}
-                                onChange={(e) => setVmiSearch(e.target.value)}
-                                prefix={<SearchOutlined style={{ fontSize: '12px' }} />}
-                                style={{ width: '35%', fontSize: '12px' }}
-                                size="small"
-                            />
-                            <Select
-                                value={selectedVMI}
-                                onChange={setSelectedVMI}
-                                style={{ width: '65%' }}
-                                placeholder="Select VMI"
-                                loading={loading}
-                                size="small"
-                                showSearch
-                            >
-                                {filteredVMIs.map(vmi => (
-                                    <Option key={`${vmi.namespace}/${vmi.name}`} value={vmi.name}>
-                                        {selectedNamespace === '__ALL__' ? `${vmi.namespace}/${vmi.name}` : vmi.name}
-                                    </Option>
-                                ))}
-                            </Select>
-                        </Space.Compact>
+                        <Select
+                            value={selectedVMI}
+                            onChange={setSelectedVMI}
+                            style={{ width: '100%' }}
+                            placeholder="Search and select VMI"
+                            loading={loading}
+                            size="small"
+                            showSearch
+                            optionFilterProp="children"
+                        >
+                            {filteredVMIs.map(vmi => (
+                                <Option key={`${vmi.namespace}/${vmi.name}`} value={vmi.name}>
+                                    {selectedNamespace === '__ALL__' ? `${vmi.namespace}/${vmi.name}` : vmi.name}
+                                </Option>
+                            ))}
+                        </Select>
                     </div>
                 </Col>
 
