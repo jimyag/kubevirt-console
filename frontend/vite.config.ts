@@ -6,6 +6,16 @@ export default defineConfig({
     plugins: [react()],
     build: {
         outDir: '../web',
-        emptyOutDir: true
+        emptyOutDir: true,
+        rollupOptions: {
+            output: {
+                manualChunks: {
+                    vendor: ['react', 'react-dom'],
+                    antd: ['antd'],
+                    xterm: ['xterm', 'xterm-addon-fit']
+                }
+            }
+        },
+        chunkSizeWarningLimit: 1000
     }
 })
