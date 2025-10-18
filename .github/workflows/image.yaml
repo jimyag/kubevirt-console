@@ -1,0 +1,51 @@
+name: Create and publish a Docker image
+
+on:
+  push:
+    tags:
+      - v*
+
+permissions:
+  contents: read
+  packages: write
+  attestations: write
+  id-token: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-and-push-image:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Prepare metadata
+        id: meta
+        run: |
+          echo "git_tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          echo "build_time=$(date '+%Y-%m-%dT%H:%M:%S%z')" >> "$GITHUB_OUTPUT"
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64,darwin/amd64,darwin/arm64
+          file: Dockerfile
+          tags: ${{ env.REGISTRY }}/kubevirt-console:${{ steps.meta.outputs.git_tag }},${{ env.REGISTRY }}/kubevirt-console:latest
+          push: true
+          target: runner
+          build-args: |
+            GIT_TAG=${{ steps.meta.outputs.git_tag }}
+            BUILD_TIME=${{ steps.meta.outputs.build_time }}
