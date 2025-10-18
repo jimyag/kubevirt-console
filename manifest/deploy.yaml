@@ -90,7 +90,8 @@ spec:
   selector:
     app: kubevirt-console
   ports:
-    - port: 8080
+    - name: console
+      port: 80
       targetPort: web
-      name: http
+      protocol: TCP
   type: ClusterIP

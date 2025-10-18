@@ -45,3 +45,31 @@ Visit `http://127.0.0.1:8080/` and fill in the namespace and VMI. The page autom
 ## Updating embedded web assets
 
 Instructions for refreshing xterm.js bundles live in `web/README.md`.
+
+## Kubernetes deployment
+
+A sample manifest lives in `manifest/deploy.yaml`. It creates a dedicated namespace, service account, cluster-wide RBAC permitting access to `virtualmachineinstances/console`, a `Deployment`, and a `ClusterIP` Service listening on port 80 (forwarded to the pod's 8080). Apply it with:
+
+```bash
+kubectl apply -f manifest/deploy.yaml
+```
+
+After the pod is running, expose the web UI locally (for example):
+
+```bash
+kubectl port-forward -n kubevirt-console deploy/kubevirt-console 8080:80
+```
+
+Then open `http://127.0.0.1:8080/` to reach the embedded xterm UI.
+
+## Roadmap / TODO
+
+- [ ] Add authentication/authorization for the web console so only authorised users can reach VMI terminals.
+- [ ] Improve observability (structured logging, metrics, tracing) to support production deployments.
+- [ ] Introduce automated tests for CLI parsing and websocket handling to avoid regressions.
+- [ ] Enhance the frontend UX (namespace discovery, auto-complete, reconnect logic, multi-language support).
+- [ ] Provide richer error reporting to distinguish between missing VMIs, RBAC denials, timeouts, etc.
+- [ ] Package the deployment as Helm/Kustomize for easier customisation.
+- [ ] Harden the release pipeline (security scanning, SBOM, multi-arch validation).
+- [ ] Document more operational guidance (troubleshooting, FAQ, configuration examples).
+- [ ] Prototype an operator/CRD-based flow for auto-provisioning per-VMI console pods while keeping the shared deployment as the default.
