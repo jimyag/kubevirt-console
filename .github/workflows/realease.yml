@@ -34,6 +34,7 @@ jobs:
           allowUpdates: true
           token: ${{ secrets.GITHUB_TOKEN }}
       - uses: wangyoucao577/go-release-action@v1
+        # https://github.com/wangyoucao577/go-release-action
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           goos: ${{ matrix.goos }}
@@ -41,3 +42,4 @@ jobs:
           build_command: "make build"
           binary_name: "kubevirt-console"
           extra_files: kubevirt-console
+          compress_assets: "OFF"
