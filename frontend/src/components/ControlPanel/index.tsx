@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Select, Button, Space, message, Row, Col, Card, Typography } from 'antd';
 import { ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import { useConsoleStore } from '../../store/consoleStore';
@@ -41,10 +41,80 @@ export const ControlPanel: React.FC = () => {
         }
     };
 
+    const initializedRef = useRef(false);
+    const initialNamespaceRef = useRef(selectedNamespace);
+
     // 初始化加载
     useEffect(() => {
         loadVMIs();
     }, []);
+
+    // 根据 URL 初始化选择
+    useLayoutEffect(() => {
+        if (initializedRef.current) return;
+        if (typeof window === 'undefined') return;
+        initializedRef.current = true;
+
+        const params = new URLSearchParams(window.location.search);
+        const namespaceParam = params.get('namespace');
+        const vmiParam = params.get('vmi');
+
+        if (namespaceParam) {
+            setSelectedNamespace(namespaceParam);
+        } else if (!initialNamespaceRef.current) {
+            setSelectedNamespace('__ALL__');
+        }
+
+        if (vmiParam) {
+            setSelectedVMI(vmiParam);
+        }
+    }, [setSelectedNamespace, setSelectedVMI]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+
+        const handlePopState = () => {
+            const params = new URLSearchParams(window.location.search);
+            const namespaceParam = params.get('namespace');
+            const vmiParam = params.get('vmi');
+
+            setSelectedNamespace(namespaceParam ?? '__ALL__');
+            setSelectedVMI(vmiParam ?? '');
+        };
+
+        window.addEventListener('popstate', handlePopState);
+        return () => {
+            window.removeEventListener('popstate', handlePopState);
+        };
+    }, [setSelectedNamespace, setSelectedVMI]);
+
+    // 同步选择到 URL
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        if (!initializedRef.current) return;
+
+        const params = new URLSearchParams(window.location.search);
+
+        if (selectedNamespace && selectedNamespace !== '__ALL__') {
+            params.set('namespace', selectedNamespace);
+        } else {
+            params.delete('namespace');
+        }
+
+        if (selectedVMI) {
+            params.set('vmi', selectedVMI);
+        } else {
+            params.delete('vmi');
+        }
+
+        const query = params.toString();
+        const target = query ? `${window.location.pathname}?${query}` : window.location.pathname;
+        const current = window.location.pathname + window.location.search;
+
+        if (current !== target) {
+            window.history.replaceState(null, '', target);
+        }
+    }, [selectedNamespace, selectedVMI]);
 
     // 过滤 VMI 列表（基于选中的命名空间）
     const filteredVMIs = vmiList.filter(vmi => {

@@ -35,7 +35,7 @@ export const useConsoleStore = create<ConsoleStore>((set) => ({
     },
     vmiList: [],
     namespaces: [],
-    selectedNamespace: '',
+    selectedNamespace: '__ALL__',
     selectedVMI: '',
 
     setConfig: (config) => set({ config }),
