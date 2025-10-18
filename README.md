@@ -34,8 +34,7 @@ Serve the embedded UI and access the console through the browser:
 ./kubevirt-console web --listen 127.0.0.1:8080
 ```
 
-Visit `http://127.0.0.1:8080/`, fill in the namespace and VMI (or pass them via query parameters), and the page will stream the serial console over WebSocket.
-If you leave the namespace empty, the server falls back to the namespace from your kubeconfig context.
+Visit `http://127.0.0.1:8080/` and fill in the namespace and VMI. The page automatically syncs those fields into the URL (so you can bookmark/share the link) and streams the serial console over WebSocket. If you leave the namespace empty, the server falls back to the namespace from your kubeconfig context. Terminal output includes connection status, and any errors are highlighted next to the Connect button.
 
 ## Updating embedded web assets
 

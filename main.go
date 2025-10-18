@@ -89,7 +89,7 @@ func init() {
 
 	consoleCmd.Flags().StringVarP(&namespace, "namespace", "n", "", "namespace of the virtual machine instance")
 
-	webCmd.Flags().StringVar(&listenAddr, "listen", ":8080", "address to serve the web console on")
+	webCmd.Flags().StringVar(&listenAddr, "listen", "127.0.0.1:8080", "address to serve the web console on")
 
 	rootCmd.AddCommand(consoleCmd)
 	rootCmd.AddCommand(webCmd)

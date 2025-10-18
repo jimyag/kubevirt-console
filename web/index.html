@@ -219,39 +219,39 @@
 				ws = new WebSocket(endpoint);
 				ws.binaryType = 'arraybuffer';
 
-			ws.onopen = function () {
-				console.log('websocket open');
-				term.clear();
-				fitAddon.fit();
-				updateStatus('Connected', 'success');
-				term.focus();
-			};
+				ws.onopen = function () {
+					console.log('websocket open');
+					term.clear();
+					fitAddon.fit();
+					updateStatus('Connected', 'success');
+					term.focus();
+				};
 
-			ws.onmessage = function (event) {
-				if (event.data instanceof ArrayBuffer) {
-					term.write(decoder.decode(event.data));
-				} else if (typeof event.data === 'string') {
-					if (event.data === 'serial console ready') {
-						updateStatus('Connected', 'success');
-					} else if (event.data.startsWith('serial console error:') || event.data.startsWith('console ')) {
-						updateStatus('Console error', 'error', event.data);
-						term.writeln(`\r\n${event.data}\r\n`);
-					} else {
-						term.write(event.data);
+				ws.onmessage = function (event) {
+					if (event.data instanceof ArrayBuffer) {
+						term.write(decoder.decode(event.data));
+					} else if (typeof event.data === 'string') {
+						if (event.data === 'serial console ready') {
+							updateStatus('Connected', 'success');
+						} else if (event.data.startsWith('serial console error:') || event.data.startsWith('console ')) {
+							updateStatus('Console error', 'error', event.data);
+							term.writeln(`\r\n${event.data}\r\n`);
+						} else {
+							term.write(event.data);
+						}
 					}
-				}
-			};
+				};
 
-			ws.onerror = function (event) {
-				console.error('websocket error', event);
-				updateStatus('Connection error', 'error');
-			};
+				ws.onerror = function (event) {
+					console.error('websocket error', event);
+					updateStatus('Connection error', 'error');
+				};
 
-			ws.onclose = function (event) {
-				console.log('websocket closed', event);
-				const statusText = event.wasClean ? 'Connection closed' : 'Connection lost';
-				updateStatus(statusText, event.wasClean ? undefined : 'error');
-			};
+				ws.onclose = function (event) {
+					console.log('websocket closed', event);
+					const statusText = event.wasClean ? 'Connection closed' : 'Connection lost';
+					updateStatus(statusText, event.wasClean ? undefined : 'error');
+				};
 			}
 
 			form.addEventListener('submit', function (event) {
@@ -284,7 +284,7 @@
 				connect(initialNamespace || namespaceInput.value, initialVMI);
 			}
 		}
-	)();
+		)();
 	</script>
 </body>
 
