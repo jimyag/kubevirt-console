@@ -1,23 +1,12 @@
 import React from 'react';
-import { Badge, Alert, Space } from 'antd';
-import { CheckCircleOutlined, CloseCircleOutlined, LoadingOutlined } from '@ant-design/icons';
+import { Badge, Typography, Space, Alert } from 'antd';
 import { useConsoleStore } from '../../store/consoleStore';
+
+const { Text } = Typography;
 
 export const ConnectionStatus: React.FC = () => {
     const { connection } = useConsoleStore();
 
-    const getStatusIcon = () => {
-        switch (connection.status) {
-            case 'connected':
-                return <CheckCircleOutlined style={{ color: '#52c41a' }} />;
-            case 'connecting':
-                return <LoadingOutlined style={{ color: '#1890ff' }} />;
-            case 'error':
-                return <CloseCircleOutlined style={{ color: '#ff4d4f' }} />;
-            default:
-                return null;
-        }
-    };
 
     const getStatusText = () => {
         switch (connection.status) {
@@ -46,21 +35,40 @@ export const ConnectionStatus: React.FC = () => {
     };
 
     return (
-        <div style={{ padding: '8px 16px', background: '#fafafa', borderBottom: '1px solid #d9d9d9' }}>
-            <Space>
+        <div style={{
+            padding: '16px 32px',
+            background: 'linear-gradient(135deg, #1a1a1a 0%, #0f0f0f 100%)',
+            borderBottom: '1px solid #262626',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)'
+        }}>
+            <Space align="center">
                 <Badge
                     status={getStatusColor() as any}
-                    text={getStatusText()}
+                    text={
+                        <Text style={{
+                            color: '#ffffff',
+                            fontSize: '14px',
+                            fontWeight: '500',
+                            letterSpacing: '0.3px'
+                        }}>
+                            {getStatusText()}
+                        </Text>
+                    }
                 />
-                {getStatusIcon()}
             </Space>
 
             {connection.error && (
                 <Alert
                     message={connection.error}
                     type="error"
-                    showIcon
-                    style={{ marginTop: '8px' }}
+                    style={{
+                        background: 'transparent',
+                        border: 'none',
+                        padding: 0
+                    }}
                 />
             )}
         </div>

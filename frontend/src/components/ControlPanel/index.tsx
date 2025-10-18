@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { Select, Button, Space, message, Row, Col } from 'antd';
-import { ReloadOutlined } from '@ant-design/icons';
+import { Select, Button, Space, message, Row, Col, Card, Typography } from 'antd';
+import { ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import { useConsoleStore } from '../../store/consoleStore';
 import { apiService } from '../../services/api';
 
 const { Option } = Select;
+const { Text } = Typography;
 
 export const ControlPanel: React.FC = () => {
     const {
@@ -67,63 +68,66 @@ export const ControlPanel: React.FC = () => {
     };
 
     return (
-        <div style={{
-            padding: '12px 24px',
-            background: '#fafafa',
-            borderBottom: '1px solid #d9d9d9',
-            boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
-        }}>
-            <Row gutter={[12, 8]} align="middle">
+        <Card
+            size="small"
+            style={{
+                margin: '20px 32px',
+                background: 'linear-gradient(135deg, #1a1a1a 0%, #0f0f0f 100%)',
+                border: '1px solid #262626',
+                borderRadius: '12px',
+                boxShadow: '0 4px 16px rgba(0, 0, 0, 0.3)'
+            }}
+            bodyStyle={{ padding: '24px' }}
+        >
+            <Row gutter={[16, 16]} align="middle">
                 {/* 命名空间选择 */}
                 <Col xs={24} sm={12} md={8} lg={6}>
-                    <div>
-                        <label style={{
-                            display: 'block',
-                            marginBottom: '4px',
-                            fontWeight: 500,
-                            fontSize: '13px',
-                            color: '#666'
-                        }}>
-                            Namespace
-                        </label>
+                    <Space direction="vertical" style={{ width: '100%' }}>
+                        <Text strong style={{
+                            color: '#ffffff',
+                            fontSize: '14px',
+                            fontWeight: '600',
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.5px'
+                        }}>Namespace</Text>
                         <Select
                             value={selectedNamespace}
                             onChange={setSelectedNamespace}
                             style={{ width: '100%' }}
                             placeholder="Search and select namespace"
-                            size="small"
+                            size="middle"
                             showSearch
                             optionFilterProp="children"
+                            suffixIcon={<SearchOutlined style={{ color: '#a6a6a6' }} />}
                         >
                             <Option value="__ALL__">All namespaces</Option>
                             {namespaces.map(ns => (
                                 <Option key={ns} value={ns}>{ns}</Option>
                             ))}
                         </Select>
-                    </div>
+                    </Space>
                 </Col>
 
                 {/* VMI 选择 */}
                 <Col xs={24} sm={12} md={8} lg={6}>
-                    <div>
-                        <label style={{
-                            display: 'block',
-                            marginBottom: '4px',
-                            fontWeight: 500,
-                            fontSize: '13px',
-                            color: '#666'
-                        }}>
-                            VMI
-                        </label>
+                    <Space direction="vertical" style={{ width: '100%' }}>
+                        <Text strong style={{
+                            color: '#ffffff',
+                            fontSize: '14px',
+                            fontWeight: '600',
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.5px'
+                        }}>VMI</Text>
                         <Select
                             value={selectedVMI}
                             onChange={setSelectedVMI}
                             style={{ width: '100%' }}
                             placeholder="Search and select VMI"
                             loading={loading}
-                            size="small"
+                            size="middle"
                             showSearch
                             optionFilterProp="children"
+                            suffixIcon={<SearchOutlined style={{ color: '#a6a6a6' }} />}
                         >
                             {filteredVMIs.map(vmi => (
                                 <Option key={`${vmi.namespace}/${vmi.name}`} value={vmi.name}>
@@ -131,34 +135,50 @@ export const ControlPanel: React.FC = () => {
                                 </Option>
                             ))}
                         </Select>
-                    </div>
+                    </Space>
                 </Col>
 
                 {/* 操作按钮 */}
                 <Col xs={24} sm={12} md={8} lg={6}>
-                    <Space size="small">
+                    <Space>
                         <Button
                             type="primary"
                             onClick={handleConnect}
                             disabled={!selectedVMI || connection.status === 'connecting'}
                             loading={connection.status === 'connecting'}
-                            size="small"
-                            style={{ fontSize: '12px' }}
+                            size="middle"
+                            style={{
+                                background: 'linear-gradient(135deg, #00d4aa 0%, #00b894 100%)',
+                                borderColor: '#00d4aa',
+                                boxShadow: '0 4px 12px rgba(0, 212, 170, 0.3)',
+                                borderRadius: '8px',
+                                fontWeight: '600',
+                                height: '40px',
+                                padding: '0 24px'
+                            }}
                         >
                             {connection.status === 'connecting' ? 'Connecting...' : 'Connect'}
                         </Button>
                         <Button
-                            icon={<ReloadOutlined style={{ fontSize: '12px' }} />}
+                            icon={<ReloadOutlined />}
                             onClick={() => loadVMIs(selectedNamespace === '__ALL__' ? undefined : selectedNamespace)}
                             loading={loading}
-                            size="small"
-                            style={{ fontSize: '12px' }}
+                            size="middle"
+                            style={{
+                                background: 'transparent',
+                                borderColor: '#262626',
+                                color: '#bfbfbf',
+                                borderRadius: '8px',
+                                fontWeight: '500',
+                                height: '40px',
+                                padding: '0 20px'
+                            }}
                         >
                             Refresh
                         </Button>
                     </Space>
                 </Col>
             </Row>
-        </div>
+        </Card>
     );
 };
