@@ -3,7 +3,7 @@ module github.com/jimyag/kubevirt-console
 go 1.25
 
 require (
-	github.com/gorilla/websocket v1.5.0
+	github.com/gorilla/websocket v1.5.3
 	github.com/jimmicro/version v1.0.0
 	github.com/spf13/cobra v1.10.1
 	github.com/spf13/pflag v1.0.10
