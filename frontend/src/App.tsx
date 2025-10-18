@@ -1,13 +1,14 @@
 import React, { useEffect } from 'react';
-import { Layout, ConfigProvider, Space, Typography, theme } from 'antd';
+import { Layout, ConfigProvider, Typography, Space, theme, Tag } from 'antd';
 import { Terminal } from './components/Terminal';
 import { ControlPanel } from './components/ControlPanel';
 import { ConnectionStatus } from './components/ConnectionStatus';
 import { useConsoleStore } from './store/consoleStore';
 import { apiService } from './services/api';
+import './App.css';
 
 const { Header, Content } = Layout;
-const { Title } = Typography;
+const { Title, Text } = Typography;
 
 const App: React.FC = () => {
     const { setConfig } = useConsoleStore();
@@ -48,61 +49,33 @@ const App: React.FC = () => {
                 },
             }}
         >
-            <Layout style={{ height: '100vh', background: '#000' }}>
-                {/* 顶部导航栏 */}
-                <Header style={{
-                    background: 'linear-gradient(135deg, #1a1a1a 0%, #0f0f0f 100%)',
-                    borderBottom: '1px solid #262626',
-                    padding: '0 32px',
-                    height: '72px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    boxShadow: '0 2px 8px rgba(0, 0, 0, 0.3)'
-                }}>
-                    <Space align="center">
-                        <div style={{
-                            width: '44px',
-                            height: '44px',
-                            background: 'linear-gradient(135deg, #00d4aa 0%, #00b894 100%)',
-                            borderRadius: '12px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            fontSize: '22px',
-                            fontWeight: 'bold',
-                            color: 'white',
-                            boxShadow: '0 4px 16px rgba(0, 212, 170, 0.4)',
-                            border: '1px solid rgba(0, 212, 170, 0.2)'
-                        }}>
-                            K
+            <div className="app-root">
+                <div className="app-aurora" />
+                <Layout className="app-layout">
+                    <Header className="app-header">
+                        <Space size={16} className="app-header__branding">
+                            <div className="app-header__mark">K</div>
+                            <div>
+                                <Title level={4} className="app-header__title">KubeVirt Console</Title>
+                                <Text className="app-header__subtitle">Seamless serial access for your virtual machines</Text>
+                            </div>
+                        </Space>
+                        <Space size={12} align="center">
+                            <Tag color="success" className="app-header__badge">Live</Tag>
+                            <Text className="app-header__meta">Cluster Console</Text>
+                        </Space>
+                    </Header>
+                    <Content className="app-content">
+                        <div className="app-controls">
+                            <ControlPanel />
+                            <ConnectionStatus />
                         </div>
-                        <Title level={3} style={{
-                            margin: 0,
-                            color: '#ffffff',
-                            fontWeight: '600',
-                            background: 'linear-gradient(135deg, #ffffff 0%, #bfbfbf 100%)',
-                            WebkitBackgroundClip: 'text',
-                            WebkitTextFillColor: 'transparent',
-                            backgroundClip: 'text'
-                        }}>
-                            KubeVirt Console
-                        </Title>
-                    </Space>
-
-                </Header>
-
-                {/* 筛选控制面板 */}
-                <ControlPanel />
-
-                {/* 状态栏 */}
-                <ConnectionStatus />
-
-                {/* 终端区域 */}
-                <Content style={{ padding: 0, background: '#000' }}>
-                    <Terminal />
-                </Content>
-            </Layout>
+                        <div className="app-terminal-wrapper">
+                            <Terminal className="terminal-shell" />
+                        </div>
+                    </Content>
+                </Layout>
+            </div>
         </ConfigProvider>
     );
 };

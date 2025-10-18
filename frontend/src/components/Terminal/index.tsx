@@ -128,19 +128,10 @@ export const Terminal: React.FC<TerminalProps> = ({ className }) => {
         }
     }, [connection.status]);
 
-    return (
-        <div
-            ref={terminalRef}
-            className={className}
-            style={{
-                height: '100%',
-                width: '100%',
-                backgroundColor: '#000000',
-                padding: '0',
-                margin: '0',
-                overflow: 'hidden',
-                position: 'relative'
-            }}
-        />
-    );
+    const classes = ['terminal-container'];
+    if (className) {
+        classes.push(className);
+    }
+
+    return <div ref={terminalRef} className={classes.join(' ')} />;
 };

@@ -35,25 +35,12 @@ export const ConnectionStatus: React.FC = () => {
     };
 
     return (
-        <div style={{
-            padding: '16px 32px',
-            background: 'linear-gradient(135deg, #1a1a1a 0%, #0f0f0f 100%)',
-            borderBottom: '1px solid #262626',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)'
-        }}>
+        <div className="connection-status-bar">
             <Space align="center">
                 <Badge
                     status={getStatusColor() as any}
                     text={
-                        <Text style={{
-                            color: '#ffffff',
-                            fontSize: '14px',
-                            fontWeight: '500',
-                            letterSpacing: '0.3px'
-                        }}>
+                        <Text className="connection-status-text">
                             {getStatusText()}
                         </Text>
                     }
@@ -64,11 +51,7 @@ export const ConnectionStatus: React.FC = () => {
                 <Alert
                     message={connection.error}
                     type="error"
-                    style={{
-                        background: 'transparent',
-                        border: 'none',
-                        padding: 0
-                    }}
+                    className="connection-status-alert"
                 />
             )}
         </div>

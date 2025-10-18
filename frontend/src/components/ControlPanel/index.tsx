@@ -68,28 +68,12 @@ export const ControlPanel: React.FC = () => {
     };
 
     return (
-        <Card
-            size="small"
-            style={{
-                margin: '20px 32px',
-                background: 'linear-gradient(135deg, #1a1a1a 0%, #0f0f0f 100%)',
-                border: '1px solid #262626',
-                borderRadius: '12px',
-                boxShadow: '0 4px 16px rgba(0, 0, 0, 0.3)'
-            }}
-            bodyStyle={{ padding: '24px' }}
-        >
+        <Card size="small" className="control-panel-card">
             <Row gutter={[16, 16]} align="middle">
                 {/* 命名空间选择 */}
                 <Col xs={24} sm={12} md={8} lg={6}>
                     <Space direction="vertical" style={{ width: '100%' }}>
-                        <Text strong style={{
-                            color: '#ffffff',
-                            fontSize: '14px',
-                            fontWeight: '600',
-                            textTransform: 'uppercase',
-                            letterSpacing: '0.5px'
-                        }}>Namespace</Text>
+                        <Text strong className="control-panel-label">Namespace</Text>
                         <Select
                             value={selectedNamespace}
                             onChange={setSelectedNamespace}
@@ -111,13 +95,7 @@ export const ControlPanel: React.FC = () => {
                 {/* VMI 选择 */}
                 <Col xs={24} sm={12} md={8} lg={6}>
                     <Space direction="vertical" style={{ width: '100%' }}>
-                        <Text strong style={{
-                            color: '#ffffff',
-                            fontSize: '14px',
-                            fontWeight: '600',
-                            textTransform: 'uppercase',
-                            letterSpacing: '0.5px'
-                        }}>VMI</Text>
+                        <Text strong className="control-panel-label">VMI</Text>
                         <Select
                             value={selectedVMI}
                             onChange={setSelectedVMI}
@@ -147,15 +125,6 @@ export const ControlPanel: React.FC = () => {
                             disabled={!selectedVMI || connection.status === 'connecting'}
                             loading={connection.status === 'connecting'}
                             size="middle"
-                            style={{
-                                background: 'linear-gradient(135deg, #00d4aa 0%, #00b894 100%)',
-                                borderColor: '#00d4aa',
-                                boxShadow: '0 4px 12px rgba(0, 212, 170, 0.3)',
-                                borderRadius: '8px',
-                                fontWeight: '600',
-                                height: '40px',
-                                padding: '0 24px'
-                            }}
                         >
                             {connection.status === 'connecting' ? 'Connecting...' : 'Connect'}
                         </Button>
@@ -164,15 +133,7 @@ export const ControlPanel: React.FC = () => {
                             onClick={() => loadVMIs(selectedNamespace === '__ALL__' ? undefined : selectedNamespace)}
                             loading={loading}
                             size="middle"
-                            style={{
-                                background: 'transparent',
-                                borderColor: '#262626',
-                                color: '#bfbfbf',
-                                borderRadius: '8px',
-                                fontWeight: '500',
-                                height: '40px',
-                                padding: '0 20px'
-                            }}
+                            className="control-panel-refresh"
                         >
                             Refresh
                         </Button>
