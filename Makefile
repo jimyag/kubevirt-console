@@ -8,8 +8,16 @@ LDFLAGS := -s -w \
 IMAGE := ghcr.io/jimyag/kubevirt-console
 
 .PHONY: build
-build:
+build: build-frontend
 	go build -trimpath -v -ldflags "$(LDFLAGS)" .
+
+.PHONY: build-frontend
+build-frontend:
+	cd frontend && ./build.sh
+
+.PHONY: dev-frontend
+dev-frontend:
+	cd frontend && npm run dev
 
 .PHONY: debug-image
 debug-image:

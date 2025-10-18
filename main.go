@@ -32,7 +32,7 @@ var (
 	webVMIFlag       string
 )
 
-//go:embed web/* web/assets/*
+//go:embed web/*
 var webContent embed.FS
 
 var upgrader = websocket.Upgrader{
@@ -306,7 +306,10 @@ func runWebServer(client kubecli.KubevirtClient, addr string, timeout time.Durat
 	mux.HandleFunc("/ws", server.handleWebsocket)
 	mux.HandleFunc("/api/config", server.handleConfig)
 	mux.HandleFunc("/api/vmis", server.handleVMIs)
-	mux.Handle("/", http.FileServer(http.FS(contentFS)))
+	mux.HandleFunc("/api/namespaces", server.handleNamespaces)
+
+	// 静态文件服务，支持 React SPA 路由
+	mux.Handle("/", server.handleStaticFiles(contentFS))
 
 	log.Printf("Serving web console at http://%s/ (mode=%s)", addr, server.mode())
 	return http.ListenAndServe(addr, mux)
@@ -537,4 +540,83 @@ func (s *webServer) handleVMIs(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(result); err != nil {
 		log.Printf("failed to write vmi list response: %v", err)
 	}
+}
+
+func (s *webServer) handleNamespaces(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if s.fixedVMI != "" {
+		ns := s.resolvedNamespace("")
+		if ns == "" {
+			http.Error(w, "namespace cannot be determined", http.StatusBadRequest)
+			return
+		}
+		result := []string{ns}
+		if err := json.NewEncoder(w).Encode(result); err != nil {
+			log.Printf("failed to write dedicated namespace response: %v", err)
+		}
+		return
+	}
+
+	// 获取所有命名空间
+	ctx := r.Context()
+	vmiClient := s.client.VirtualMachineInstance(metav1.NamespaceAll)
+	list, err := vmiClient.List(ctx, metav1.ListOptions{})
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to list VMIs: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	namespaceSet := make(map[string]bool)
+	for _, item := range list.Items {
+		namespaceSet[item.Namespace] = true
+	}
+
+	result := make([]string, 0, len(namespaceSet))
+	for ns := range namespaceSet {
+		result = append(result, ns)
+	}
+
+	if err := json.NewEncoder(w).Encode(result); err != nil {
+		log.Printf("failed to write namespace list response: %v", err)
+	}
+}
+
+func (s *webServer) handleStaticFiles(contentFS fs.FS) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 如果是 API 路径，跳过
+		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/ws") {
+			http.NotFound(w, r)
+			return
+		}
+
+		// 尝试打开文件
+		file, err := contentFS.Open(strings.TrimPrefix(r.URL.Path, "/"))
+		if err != nil {
+			// 如果文件不存在，返回 index.html（支持 React Router）
+			file, err = contentFS.Open("index.html")
+			if err != nil {
+				http.NotFound(w, r)
+				return
+			}
+		}
+		defer file.Close()
+
+		// 设置正确的 Content-Type
+		if strings.HasSuffix(r.URL.Path, ".js") {
+			w.Header().Set("Content-Type", "application/javascript")
+		} else if strings.HasSuffix(r.URL.Path, ".css") {
+			w.Header().Set("Content-Type", "text/css")
+		} else if strings.HasSuffix(r.URL.Path, ".html") {
+			w.Header().Set("Content-Type", "text/html")
+		}
+
+		// 读取文件内容并写入响应
+		content, err := io.ReadAll(file)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write(content)
+	})
 }
