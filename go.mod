@@ -3,11 +3,11 @@ module github.com/jimyag/kubevirt-console
 go 1.25
 
 require (
-	github.com/gorilla/websocket v1.5.0
+	github.com/gorilla/websocket v1.5.3
 	github.com/jimmicro/version v1.0.0
 	github.com/spf13/cobra v1.10.1
 	github.com/spf13/pflag v1.0.10
-	golang.org/x/term v0.30.0
+	golang.org/x/term v0.36.0
 	k8s.io/client-go v0.32.5
 	kubevirt.io/client-go v1.6.2
 )
@@ -52,7 +52,7 @@ require (
 	go.uber.org/mock v0.5.1 // indirect
 	golang.org/x/net v0.38.0 // indirect
 	golang.org/x/oauth2 v0.27.0 // indirect
-	golang.org/x/sys v0.31.0 // indirect
+	golang.org/x/sys v0.37.0 // indirect
 	golang.org/x/text v0.23.0 // indirect
 	golang.org/x/time v0.7.0 // indirect
 	google.golang.org/protobuf v1.35.1 // indirect
