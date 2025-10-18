@@ -20,6 +20,14 @@ rules:
       - virtualmachineinstances/console
     verbs:
       - get
+  - apiGroups:
+      - "kubevirt.io"
+    resources:
+      - virtualmachineinstances
+    verbs:
+      - list
+      - get
+      - watch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
