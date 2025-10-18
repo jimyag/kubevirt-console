@@ -23,14 +23,14 @@ export const ControlPanel: React.FC = () => {
 
     const [loading, setLoading] = useState(false);
 
-    // 加载 VMI 列表
+    // Load the VMI list from the API.
     const loadVMIs = async (namespace?: string) => {
         setLoading(true);
         try {
             const vmis = await apiService.getVMIs(namespace);
             setVMIList(vmis);
 
-            // 提取命名空间列表
+            // Derive the namespace list from the VMI data.
             const uniqueNamespaces = Array.from(new Set(vmis.map(vmi => vmi.namespace))).sort();
             setNamespaces(uniqueNamespaces);
         } catch (error) {
@@ -44,12 +44,12 @@ export const ControlPanel: React.FC = () => {
     const initializedRef = useRef(false);
     const initialNamespaceRef = useRef(selectedNamespace);
 
-    // 初始化加载
+    // Kick off the initial data fetch.
     useEffect(() => {
         loadVMIs();
     }, []);
 
-    // 根据 URL 初始化选择
+    // Seed selector state from URL parameters.
     useLayoutEffect(() => {
         if (initializedRef.current) return;
         if (typeof window === 'undefined') return;
@@ -88,7 +88,7 @@ export const ControlPanel: React.FC = () => {
         };
     }, [setSelectedNamespace, setSelectedVMI]);
 
-    // 同步选择到 URL
+    // Keep the current selections reflected in the URL.
     useEffect(() => {
         if (typeof window === 'undefined') return;
         if (!initializedRef.current) return;
@@ -116,12 +116,12 @@ export const ControlPanel: React.FC = () => {
         }
     }, [selectedNamespace, selectedVMI]);
 
-    // 过滤 VMI 列表（基于选中的命名空间）
+    // Filter the VMIs by the active namespace selection.
     const filteredVMIs = vmiList.filter(vmi => {
         return !selectedNamespace || selectedNamespace === '__ALL__' || vmi.namespace === selectedNamespace;
     });
 
-    // 处理连接
+    // Attempt to connect when a VMI is selected.
     const handleConnect = () => {
         if (!selectedVMI) {
             message.warning('Please select a VMI');
@@ -140,7 +140,7 @@ export const ControlPanel: React.FC = () => {
     return (
         <Card size="small" className="control-panel-card">
             <Row gutter={[16, 16]} align="middle">
-                {/* 命名空间选择 */}
+                {/* Namespace selector */}
                 <Col xs={24} sm={12} md={8} lg={6}>
                     <Space direction="vertical" style={{ width: '100%' }}>
                         <Text strong className="control-panel-label">Namespace</Text>
@@ -162,7 +162,7 @@ export const ControlPanel: React.FC = () => {
                     </Space>
                 </Col>
 
-                {/* VMI 选择 */}
+                {/* VMI selector */}
                 <Col xs={24} sm={12} md={8} lg={6}>
                     <Space direction="vertical" style={{ width: '100%' }}>
                         <Text strong className="control-panel-label">VMI</Text>
@@ -186,7 +186,7 @@ export const ControlPanel: React.FC = () => {
                     </Space>
                 </Col>
 
-                {/* 操作按钮 */}
+                {/* Action buttons */}
                 <Col xs={24} sm={12} md={8} lg={6}>
                     <Space>
                         <Button

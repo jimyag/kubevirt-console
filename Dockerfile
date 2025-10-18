@@ -1,17 +1,17 @@
-# 前端构建阶段
+# Frontend build stage
 FROM node:18-alpine AS frontend-builder
 
 WORKDIR /app/frontend
 
-# 复制前端依赖文件
+# Copy frontend dependency manifests
 COPY frontend/package*.json ./
 RUN npm ci --only=production
 
-# 复制前端源码并构建
+# Copy frontend source and build assets
 COPY frontend/ ./
 RUN npm run build
 
-# Go 后端构建阶段
+# Go backend build stage
 FROM golang:alpine AS go-builder
 
 WORKDIR /app
@@ -19,14 +19,14 @@ WORKDIR /app
 ARG GIT_TAG
 ARG BUILD_TIME
 
-# 复制 Go 模块文件
+# Copy Go module manifests
 COPY go.mod go.sum ./
 RUN go mod download
 
-# 复制前端构建产物
+# Copy built frontend assets
 COPY --from=frontend-builder /app/dist ./web
 
-# 复制 Go 源码并构建
+# Copy Go sources and build binary
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod/ \
     --mount=type=cache,target="/root/.cache/go-build" \

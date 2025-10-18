@@ -13,11 +13,11 @@ export class WebSocketService {
     connect(namespace: string, vmi: string, onMessage: (data: string) => void, onError: (error: ConsoleError) => void) {
         const store = useConsoleStore.getState();
 
-        // 保存连接信息用于重连
+        // Remember the connection details for future reconnects.
         this.lastNamespace = namespace;
         this.lastVMI = vmi;
 
-        // 关闭现有连接
+        // Close any existing websocket before opening a new one.
         this.disconnect();
 
         const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
@@ -77,7 +77,7 @@ export class WebSocketService {
                     error: event.wasClean ? undefined : 'Connection lost'
                 });
 
-                // 自动重连逻辑
+                // Handle automatic reconnection attempts.
                 if (!event.wasClean && this.reconnectAttempts < this.maxReconnectAttempts) {
                     this.scheduleReconnect(onMessage, onError);
                 } else if (this.reconnectAttempts >= this.maxReconnectAttempts) {
@@ -131,7 +131,7 @@ export class WebSocketService {
         this.reconnectAttempts = 0;
     }
 
-    // 重置重连计数器
+    // Reset the reconnection attempt counter.
     resetReconnectAttempts() {
         this.reconnectAttempts = 0;
     }

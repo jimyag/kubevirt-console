@@ -14,7 +14,7 @@ export const useNamespaceDiscovery = () => {
             const result = await apiService.getNamespaces();
             setNamespaces(result);
 
-            // 缓存到 localStorage
+            // Cache the namespaces in localStorage.
             localStorage.setItem('cachedNamespaces', JSON.stringify({
                 data: result,
                 timestamp: Date.now()
@@ -22,12 +22,12 @@ export const useNamespaceDiscovery = () => {
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to load namespaces');
 
-            // 尝试从缓存加载
+            // Attempt to load namespaces from cache.
             try {
                 const cached = localStorage.getItem('cachedNamespaces');
                 if (cached) {
                     const { data, timestamp } = JSON.parse(cached);
-                    // 检查缓存是否过期（1 小时）
+                    // Validate cache freshness (1 hour TTL).
                     if (Date.now() - timestamp < 3600000) {
                         setNamespaces(data);
                     }

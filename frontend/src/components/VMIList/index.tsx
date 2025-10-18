@@ -25,14 +25,14 @@ export const VMIList: React.FC = () => {
     const [vmiSearch, setVmiSearch] = useState('');
     const [loading, setLoading] = useState(false);
 
-    // 加载 VMI 列表
+    // Load VMIs from the backend.
     const loadVMIs = async (namespace?: string) => {
         setLoading(true);
         try {
             const vmis = await apiService.getVMIs(namespace);
             setVMIList(vmis);
 
-            // 提取命名空间列表
+            // Derive the namespace list from the VMIs.
             const uniqueNamespaces = Array.from(new Set(vmis.map(vmi => vmi.namespace))).sort();
             setNamespaces(uniqueNamespaces);
         } catch (error) {
@@ -43,12 +43,12 @@ export const VMIList: React.FC = () => {
         }
     };
 
-    // 初始化加载
+    // Load the initial data set on mount.
     useEffect(() => {
         loadVMIs();
     }, []);
 
-    // 过滤 VMI 列表
+    // Apply namespace and keyword filters.
     const filteredVMIs = vmiList.filter(vmi => {
         const matchesNamespace = !selectedNamespace || selectedNamespace === '__ALL__' || vmi.namespace === selectedNamespace;
         const matchesSearch = !vmiSearch ||
@@ -57,7 +57,7 @@ export const VMIList: React.FC = () => {
         return matchesNamespace && matchesSearch;
     });
 
-    // 处理连接
+    // Attempt to initiate the console connection.
     const handleConnect = () => {
         if (!selectedVMI) {
             message.warning('Please select a VMI');
@@ -76,7 +76,7 @@ export const VMIList: React.FC = () => {
     return (
         <div style={{ padding: '16px', background: '#f5f5f5', borderRadius: '6px' }}>
             <Space direction="vertical" style={{ width: '100%' }} size="middle">
-                {/* 命名空间选择 */}
+                {/* Namespace selector */}
                 <div>
                     <label style={{ display: 'block', marginBottom: '4px', fontWeight: 500 }}>
                         Namespace
@@ -105,7 +105,7 @@ export const VMIList: React.FC = () => {
                     </Space.Compact>
                 </div>
 
-                {/* VMI 选择 */}
+                {/* VMI selector */}
                 <div>
                     <label style={{ display: 'block', marginBottom: '4px', fontWeight: 500 }}>
                         VMI
@@ -134,7 +134,7 @@ export const VMIList: React.FC = () => {
                     </Space.Compact>
                 </div>
 
-                {/* 操作按钮 */}
+                {/* Action buttons */}
                 <Space>
                     <Button
                         type="primary"

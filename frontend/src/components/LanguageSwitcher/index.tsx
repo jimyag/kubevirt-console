@@ -72,7 +72,7 @@ export const LanguageSwitcher: React.FC = () => {
     const [currentLanguage, setCurrentLanguage] = useState<string>('en');
 
     useEffect(() => {
-        // 从 localStorage 加载保存的语言设置
+        // Load the persisted language preference.
         const savedLanguage = localStorage.getItem('consoleLanguage') || 'en';
         setCurrentLanguage(savedLanguage);
     }, []);
@@ -81,7 +81,7 @@ export const LanguageSwitcher: React.FC = () => {
         setCurrentLanguage(language);
         localStorage.setItem('consoleLanguage', language);
 
-        // 触发语言变更事件
+        // Broadcast the language change event.
         window.dispatchEvent(new CustomEvent('languageChanged', {
             detail: { language, translations: translations[language as keyof typeof translations] }
         }));
@@ -109,7 +109,7 @@ export const LanguageSwitcher: React.FC = () => {
     );
 };
 
-// 导出翻译函数供其他组件使用
+// Export translation helper for the rest of the UI.
 export const useTranslation = () => {
     const [t, setT] = useState(translations.en);
 

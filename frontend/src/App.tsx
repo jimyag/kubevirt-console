@@ -13,7 +13,7 @@ const { Title, Text } = Typography;
 const App: React.FC = () => {
     const { setConfig } = useConsoleStore();
 
-    // 初始化配置
+    // Initialize runtime configuration from the backend.
     useEffect(() => {
         const initConfig = async () => {
             try {

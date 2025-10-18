@@ -1,17 +1,17 @@
 #!/bin/bash
 
-# 前端构建脚本
+# Frontend build helper script
 set -e
 
 echo "Building React frontend..."
 
-# 检查是否安装了依赖
+# Ensure dependencies are installed.
 if [ ! -d "node_modules" ]; then
     echo "Installing dependencies..."
     npm install
 fi
 
-# 构建前端
+# Build the frontend bundle.
 echo "Building frontend assets..."
 npm run build
 

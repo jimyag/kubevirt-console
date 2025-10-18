@@ -308,7 +308,7 @@ func runWebServer(client kubecli.KubevirtClient, addr string, timeout time.Durat
 	mux.HandleFunc("/api/vmis", server.handleVMIs)
 	mux.HandleFunc("/api/namespaces", server.handleNamespaces)
 
-	// 静态文件服务，支持 React SPA 路由
+	// Serve static assets and provide React SPA routing fallback.
 	mux.Handle("/", server.handleStaticFiles(contentFS))
 
 	log.Printf("Serving web console at http://%s/ (mode=%s)", addr, server.mode())
@@ -558,7 +558,7 @@ func (s *webServer) handleNamespaces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 获取所有命名空间
+	// Fetch all namespaces visible to the console.
 	ctx := r.Context()
 	vmiClient := s.client.VirtualMachineInstance(metav1.NamespaceAll)
 	list, err := vmiClient.List(ctx, metav1.ListOptions{})
@@ -584,16 +584,16 @@ func (s *webServer) handleNamespaces(w http.ResponseWriter, r *http.Request) {
 
 func (s *webServer) handleStaticFiles(contentFS fs.FS) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 如果是 API 路径，跳过
+		// Skip API and websocket routes.
 		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/ws") {
 			http.NotFound(w, r)
 			return
 		}
 
-		// 尝试打开文件
+		// Try to open the requested asset.
 		file, err := contentFS.Open(strings.TrimPrefix(r.URL.Path, "/"))
 		if err != nil {
-			// 如果文件不存在，返回 index.html（支持 React Router）
+			// Fall back to index.html when the asset is missing to support React Router.
 			file, err = contentFS.Open("index.html")
 			if err != nil {
 				http.NotFound(w, r)
@@ -602,7 +602,7 @@ func (s *webServer) handleStaticFiles(contentFS fs.FS) http.Handler {
 		}
 		defer file.Close()
 
-		// 设置正确的 Content-Type
+		// Set the appropriate Content-Type header.
 		if strings.HasSuffix(r.URL.Path, ".js") {
 			w.Header().Set("Content-Type", "application/javascript")
 		} else if strings.HasSuffix(r.URL.Path, ".css") {
@@ -611,7 +611,7 @@ func (s *webServer) handleStaticFiles(contentFS fs.FS) http.Handler {
 			w.Header().Set("Content-Type", "text/html")
 		}
 
-		// 读取文件内容并写入响应
+		// Read the file content and write it to the response.
 		content, err := io.ReadAll(file)
 		if err != nil {
 			http.NotFound(w, r)

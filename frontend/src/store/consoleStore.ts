@@ -2,17 +2,17 @@ import { create } from 'zustand';
 import { VMIInfo, ConsoleConfig, ConnectionState } from '../types';
 
 interface ConsoleStore {
-    // 配置信息
+    // Configuration payload returned by the backend.
     config: ConsoleConfig | null;
 
-    // 连接状态
+    // Connection state for the active console session.
     connection: ConnectionState;
 
-    // VMI 列表
+    // Cached list of VMIs and namespaces.
     vmiList: VMIInfo[];
     namespaces: string[];
 
-    // 选中的 VMI
+    // Currently selected namespace and VMI.
     selectedNamespace: string;
     selectedVMI: string;
 

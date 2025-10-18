@@ -21,10 +21,10 @@ export const Terminal: React.FC<TerminalProps> = ({ className }) => {
 
         console.log('Initializing xterm terminal...');
 
-        // 清空容器
+        // Clear any previous terminal markup.
         terminalRef.current.innerHTML = '';
 
-        // 初始化 xterm
+        // Initialize the xterm instance.
         const terminal = new XTerm({
             convertEol: true,
             cursorBlink: true,
@@ -41,7 +41,7 @@ export const Terminal: React.FC<TerminalProps> = ({ className }) => {
         const fitAddon = new FitAddon();
         terminal.loadAddon(fitAddon);
 
-        // 确保容器可见
+        // Ensure the terminal container is visible.
         if (terminalRef.current) {
             terminalRef.current.style.display = 'block';
             terminalRef.current.style.height = '100%';
@@ -50,13 +50,13 @@ export const Terminal: React.FC<TerminalProps> = ({ className }) => {
 
         terminal.open(terminalRef.current);
 
-        // 延迟执行 fit 和 focus
+        // Defer fit and focus so layout can settle.
         setTimeout(() => {
             fitAddon.fit();
             terminal.focus();
         }, 100);
 
-        // 显示初始提示
+        // Show an initial banner while waiting for the backend.
         terminal.writeln('KubeVirt Console Ready');
         terminal.writeln('Waiting for connection...');
 
@@ -65,7 +65,7 @@ export const Terminal: React.FC<TerminalProps> = ({ className }) => {
 
         console.log('xterm terminal initialized');
 
-        // 处理终端输入
+        // Forward terminal input to the websocket when connected.
         terminal.onData((data) => {
             console.log('Terminal input:', data);
             const { connection: liveConnection } = useConsoleStore.getState();
@@ -74,7 +74,7 @@ export const Terminal: React.FC<TerminalProps> = ({ className }) => {
             }
         });
 
-        // 处理窗口大小变化
+        // Recalculate layout on window resize.
         const handleResize = () => {
             fitAddon.fit();
         };
@@ -90,21 +90,21 @@ export const Terminal: React.FC<TerminalProps> = ({ className }) => {
         if (connection.status === 'connecting' && connection.namespace && connection.vmi) {
             console.log('Connecting to WebSocket...');
 
-            // 显示连接状态
+            // Announce connection status in the terminal.
             if (xtermRef.current) {
                 xtermRef.current.writeln(`\r\nConnecting to ${connection.namespace}/${connection.vmi}...`);
             }
 
-            // 连接 WebSocket
+            // Establish the websocket connection.
             websocketService.connect(
                 connection.namespace,
                 connection.vmi,
                 (data) => {
                     console.log('WebSocket data received:', data);
                     if (xtermRef.current) {
-                        // 确保终端可见并写入数据
+                        // Keep the terminal visible and append incoming data.
                         xtermRef.current.write(data);
-                        // 强制刷新显示
+                        // Force-refresh the rendered rows.
                         xtermRef.current.refresh(0, xtermRef.current.rows - 1);
                     }
                 },
@@ -119,10 +119,10 @@ export const Terminal: React.FC<TerminalProps> = ({ className }) => {
         }
     }, [connection.status, connection.namespace, connection.vmi, disconnect]);
 
-    // 更新连接状态
+    // Reflect connection status changes.
     useEffect(() => {
         if (connection.status === 'connected') {
-            // 连接成功，更新状态
+            // Mark the console as ready once connected.
             const { setConnection } = useConsoleStore.getState();
             setConnection({ isConnected: true });
         }
