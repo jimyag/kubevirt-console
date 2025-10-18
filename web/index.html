@@ -33,32 +33,62 @@
 
 		.controls form {
 			display: flex;
-			align-items: center;
-			gap: 0.5rem;
-			margin: 0;
 			flex-wrap: wrap;
+			gap: 1rem;
+			align-items: flex-end;
+			margin: 0;
+			flex: 1;
 		}
 
-		.controls select,
-		.controls input {
+		.field {
+			display: flex;
+			flex-direction: column;
+			gap: 0.35rem;
+		}
+
+		.field-label {
+			font-size: 0.85rem;
+			color: #ddd;
+		}
+
+		.field-row {
+			display: flex;
+			gap: 0.5rem;
+			align-items: center;
+		}
+
+		.field-row input,
+		.field-row select {
 			padding: 0.35rem 0.6rem;
 			border-radius: 4px;
 			border: 1px solid #2f2f2f;
 			background: #1f1f1f;
 			color: #f5f5f5;
+			min-height: 36px;
+			width: 220px;
+		}
+
+		.field-row select {
+			min-width: 260px;
 		}
 
 		.controls button {
-			padding: 0.35rem 0.9rem;
+			padding: 0.45rem 1.2rem;
 			border-radius: 4px;
 			border: none;
 			background: #0078d4;
 			color: #fff;
 			cursor: pointer;
+			min-height: 36px;
 		}
 
-		.controls button:hover {
+		.controls button:not(:disabled):hover {
 			background: #1f90f6;
+		}
+
+		.controls button:disabled {
+			opacity: 0.5;
+			cursor: not-allowed;
 		}
 
 		#status {
@@ -105,11 +135,21 @@
 <body>
 	<div class="controls">
 		<form id="connect-form">
-			<label for="namespace">Namespace</label>
-			<select id="namespace" name="namespace"></select>
-			<label for="vmi">VMI</label>
-			<select id="vmi" name="vmi"></select>
-			<button type="submit">Connect</button>
+			<div class="field" id="namespace-field">
+				<span class="field-label">Namespace</span>
+				<div class="field-row">
+					<input id="namespace-search" class="search-input" type="text" placeholder="Filter namespaces...">
+					<select id="namespace" name="namespace"></select>
+				</div>
+			</div>
+			<div class="field" id="vmi-field">
+				<span class="field-label">VMI</span>
+				<div class="field-row">
+					<input id="vmi-search" class="search-input" type="text" placeholder="Filter VMIs...">
+					<select id="vmi" name="vmi"></select>
+				</div>
+			</div>
+			<button id="connect-button" type="submit">Connect</button>
 		</form>
 		<span id="status"></span>
 		<span id="alert-banner" role="alert"></span>
@@ -122,8 +162,13 @@
 			const terminalContainer = document.getElementById('terminal');
 			const statusEl = document.getElementById('status');
 			const alertBanner = document.getElementById('alert-banner');
+			const namespaceField = document.getElementById('namespace-field');
+			const vmiField = document.getElementById('vmi-field');
+			const namespaceSearch = document.getElementById('namespace-search');
+			const vmiSearch = document.getElementById('vmi-search');
 			const namespaceSelect = document.getElementById('namespace');
 			const vmiSelect = document.getElementById('vmi');
+			const connectButton = document.getElementById('connect-button');
 			const form = document.getElementById('connect-form');
 			const params = new URLSearchParams(window.location.search);
 			const initialNamespaceParam = params.get('namespace') || '';
@@ -135,6 +180,7 @@
 				initialNamespace: '',
 				fixedNamespace: '',
 				fixedVMI: '',
+				namespaceList: [],
 				vmiIndex: new Map(),
 			};
 
@@ -179,7 +225,7 @@
 					return;
 				}
 				const nextParams = new URLSearchParams();
-				if (namespace) {
+				if (namespace && namespace !== '__ALL__') {
 					nextParams.set('namespace', namespace);
 				}
 				if (vmi) {
@@ -207,73 +253,149 @@
 				}
 			}
 
-			function renderNamespaceOptions(namespaces) {
-				namespaceSelect.textContent = '';
-				namespaces.forEach(ns => {
-					const option = document.createElement('option');
-					option.value = ns;
-					option.textContent = ns;
-					namespaceSelect.appendChild(option);
-				});
+			function optionExists(selectElement, value, namespace) {
+				return Array.from(selectElement.options).some(opt => !opt.disabled && opt.value === value && (namespace === undefined || !namespace || opt.dataset.namespace === namespace));
 			}
 
-			function renderVmiOptions(filterNamespace) {
-				vmiSelect.textContent = '';
-				const entries = [];
-				if (filterNamespace && appState.vmiIndex.has(filterNamespace)) {
-					appState.vmiIndex.get(filterNamespace).forEach(name => {
-						entries.push({ namespace: filterNamespace, name });
+			function renderNamespaceOptions(namespaces, filterText = '', preferredValue) {
+				appState.namespaceList = namespaces.slice();
+				const previous = (preferredValue !== undefined ? preferredValue : namespaceSelect.value) || '__ALL__';
+				const normalized = filterText.trim().toLowerCase();
+				const filtered = namespaces.filter(ns => !normalized || ns.toLowerCase().includes(normalized));
+
+				namespaceSelect.textContent = '';
+				const options = [{ value: '__ALL__', label: 'All namespaces' }];
+				if (filtered.length === 0) {
+					options.push({ value: '', label: '-- no namespaces --', disabled: true });
+				} else {
+					filtered.forEach(ns => options.push({ value: ns, label: ns }));
+				}
+
+				options.forEach(opt => {
+					const option = document.createElement('option');
+					option.value = opt.value;
+					option.textContent = opt.label;
+					if (opt.disabled) {
+						option.disabled = true;
+					}
+					namespaceSelect.appendChild(option);
+				});
+
+				let desired = previous;
+				if (!optionExists(namespaceSelect, desired)) {
+					desired = filtered.length > 0 ? filtered[0] : '__ALL__';
+				}
+				namespaceSelect.value = desired;
+				return namespaceSelect.value;
+			}
+
+			function renderVmiOptions(filterNamespace, searchText = '', preferredValue, preferredNamespace) {
+				const previousValue = preferredValue !== undefined ? preferredValue : vmiSelect.value;
+				const previousNamespace = preferredNamespace !== undefined ? preferredNamespace : (vmiSelect.options[vmiSelect.selectedIndex] ? vmiSelect.options[vmiSelect.selectedIndex].dataset.namespace : '');
+
+				const normalizedNamespace = filterNamespace && filterNamespace !== '__ALL__' ? filterNamespace : '';
+				const normalizedSearch = searchText.trim().toLowerCase();
+
+				let entries = [];
+				if (normalizedNamespace && appState.vmiIndex.has(normalizedNamespace)) {
+					appState.vmiIndex.get(normalizedNamespace).forEach(name => {
+						entries.push({ namespace: normalizedNamespace, name });
 					});
 				} else {
 					appState.vmiIndex.forEach((names, ns) => {
 						names.forEach(name => entries.push({ namespace: ns, name }));
 					});
 				}
+
+				if (normalizedSearch) {
+					entries = entries.filter(entry => entry.name.toLowerCase().includes(normalizedSearch) || entry.namespace.toLowerCase().includes(normalizedSearch));
+				}
+
 				entries.sort((a, b) => {
 					if (a.namespace === b.namespace) {
 						return a.name.localeCompare(b.name);
 					}
 					return a.namespace.localeCompare(b.namespace);
 				});
+
+				vmiSelect.textContent = '';
+				if (entries.length === 0) {
+					const placeholder = document.createElement('option');
+					placeholder.value = '';
+					placeholder.textContent = '-- no VMIs --';
+					placeholder.disabled = true;
+					placeholder.selected = true;
+					vmiSelect.appendChild(placeholder);
+					updateConnectAvailability();
+					return null;
+				}
+
 				entries.forEach(entry => {
 					const option = document.createElement('option');
 					option.value = entry.name;
-					option.textContent = `${entry.namespace}/${entry.name}`;
+					option.textContent = normalizedNamespace ? entry.name : `${entry.namespace}/${entry.name}`;
 					option.dataset.namespace = entry.namespace;
 					vmiSelect.appendChild(option);
 				});
+
+				let desiredNamespace = previousNamespace;
+				let desiredValue = previousValue;
+				if (!entries.some(entry => entry.name === desiredValue && (!desiredNamespace || entry.namespace === desiredNamespace))) {
+					desiredNamespace = entries[0].namespace;
+					desiredValue = entries[0].name;
+				}
+
+				const index = entries.findIndex(entry => entry.name === desiredValue && entry.namespace === desiredNamespace);
+				vmiSelect.selectedIndex = index >= 0 ? index : 0;
+				updateConnectAvailability();
+				return vmiSelect.options[vmiSelect.selectedIndex];
+			}
+
+			function updateConnectAvailability() {
+				const option = vmiSelect.options[vmiSelect.selectedIndex];
+				const enabled = !!(option && !option.disabled && option.value);
+				connectButton.disabled = !enabled;
 			}
 
 			function findNamespaceForVmi(vmiName) {
-				const options = vmiSelect.options;
-				for (let i = 0; i < options.length; i++) {
-					if (options[i].value === vmiName) {
-						return options[i].dataset.namespace || '';
+				for (const [ns, list] of appState.vmiIndex.entries()) {
+					if (list.includes(vmiName)) {
+						return ns;
 					}
 				}
 				return '';
 			}
 
+			function syncQueryFromSelection() {
+				if (appState.mode !== 'shared') {
+					return;
+				}
+				const option = vmiSelect.options[vmiSelect.selectedIndex];
+				if (!option || option.disabled || !option.value) {
+					updateQuery(namespaceSelect.value === '__ALL__' ? '' : namespaceSelect.value, '');
+					return;
+				}
+				const ns = (namespaceSelect.value && namespaceSelect.value !== '__ALL__') ? namespaceSelect.value : (option.dataset.namespace || '');
+				updateQuery(ns, option.value);
+			}
+
 			function connect(namespace, vmi) {
-				const selectedOption = vmiSelect.options[vmiSelect.selectedIndex];
-				const resolvedVMI = selectedOption ? selectedOption.value : (vmi || '').trim();
+				const option = vmiSelect.options[vmiSelect.selectedIndex];
+				const resolvedVMI = option && !option.disabled ? option.value : (vmi || '').trim();
 				if (!resolvedVMI) {
 					updateStatus('VMI is required', 'error');
 					return;
 				}
-				let resolvedNamespace = namespace ? namespace.trim() : '';
+
+				let resolvedNamespace = namespace && namespace !== '__ALL__' ? namespace.trim() : '';
+				if (!resolvedNamespace && option && option.dataset.namespace) {
+					resolvedNamespace = option.dataset.namespace;
+				}
 				if (appState.mode === 'dedicated') {
 					resolvedNamespace = appState.fixedNamespace || appState.defaultNamespace || resolvedNamespace;
-				} else {
-					if (!resolvedNamespace) {
-						const nsOption = namespaceSelect.options[namespaceSelect.selectedIndex];
-						if (nsOption) {
-							resolvedNamespace = nsOption.value;
-						}
-					}
-					if (!resolvedNamespace) {
-						resolvedNamespace = findNamespaceForVmi(resolvedVMI) || appState.initialNamespace || appState.defaultNamespace || '';
-					}
+				}
+				if (!resolvedNamespace) {
+					resolvedNamespace = findNamespaceForVmi(resolvedVMI) || appState.initialNamespace || appState.defaultNamespace || '';
 				}
 				if (!resolvedNamespace) {
 					updateStatus('Namespace is required', 'error');
@@ -288,9 +410,6 @@
 				wsParams.set('vmi', resolvedVMI);
 				const endpoint = `${protocol}://${loc.host}/ws?${wsParams.toString()}`;
 				const nsLabel = resolvedNamespace ? resolvedNamespace : '(default namespace)';
-				if (appState.mode === 'shared') {
-					updateQuery(resolvedNamespace, resolvedVMI);
-				}
 				console.log('connecting to websocket', endpoint);
 				updateStatus(`Connecting to ${nsLabel}/${resolvedVMI} ...`);
 				ws = new WebSocket(endpoint);
@@ -355,21 +474,22 @@
 							}
 							vmiMap.get(ns).add(name);
 						});
-						appState.vmiIndex = vmiMap;
 						const sortedNamespaces = Array.from(namespaceSet).sort();
-						renderNamespaceOptions(sortedNamespaces);
-						let nsValue = namespaceSelect.value;
-						if (appState.mode === 'shared') {
-							if (!nsValue || !namespaceSet.has(nsValue)) {
-								nsValue = initialNamespaceParam || appState.initialNamespace || sortedNamespaces[0] || '';
-								namespaceSelect.value = nsValue;
-							}
-							renderVmiOptions(nsValue);
-							if (initialVMIParam && vmiSelect.querySelector(`option[value="${initialVMIParam}"]`)) {
-								vmiSelect.value = initialVMIParam;
-							}
+						const normalizedMap = new Map();
+						vmiMap.forEach((set, ns) => {
+							normalizedMap.set(ns, Array.from(set).sort());
+						});
+						appState.vmiIndex = normalizedMap;
+						const selectedNamespace = renderNamespaceOptions(sortedNamespaces, namespaceSearch.value, initialNamespaceParam || appState.initialNamespace || '__ALL__');
+						const option = renderVmiOptions(selectedNamespace, vmiSearch.value, initialVMIParam || '', selectedNamespace === '__ALL__' ? '' : selectedNamespace);
+						if (initialVMIParam && option && option.value === initialVMIParam) {
+							console.log('auto-connecting using URL parameters');
+							updateStatus('Preparing connection ...');
+							connect(option.dataset.namespace || selectedNamespace, initialVMIParam);
+						} else {
+							syncQueryFromSelection();
+							updateStatus('Ready');
 						}
-						updateStatus('Ready');
 					})
 					.catch(err => {
 						updateStatus('Failed to load VMIs', 'error', err.message || String(err));
@@ -377,59 +497,62 @@
 			}
 
 			function initializeDedicatedMode(config) {
+				namespaceSearch.classList.add('hidden');
+				vmiSearch.classList.add('hidden');
+				namespaceSelect.textContent = '';
+				vmiSelect.textContent = '';
+				namespaceSelect.disabled = true;
+				vmiSelect.disabled = true;
+
 				const ns = config.fixedNamespace || config.defaultNamespace || '';
-				namespaceSelect.innerHTML = '';
 				const nsOption = document.createElement('option');
 				nsOption.value = ns;
 				nsOption.textContent = ns;
 				namespaceSelect.appendChild(nsOption);
-				namespaceSelect.disabled = true;
 
-				vmiSelect.innerHTML = '';
 				const vmiOption = document.createElement('option');
 				vmiOption.value = config.fixedVmi;
 				vmiOption.textContent = config.fixedVmi;
 				vmiOption.dataset.namespace = ns;
 				vmiSelect.appendChild(vmiOption);
-				vmiSelect.disabled = true;
-
-				form.classList.add('hidden');
+				connectButton.disabled = false;
 				updateStatus('Preparing connection ...');
 				connect(ns, config.fixedVmi);
 			}
 
-			function initializeSharedMode(config) {
-				form.classList.remove('hidden');
+			function initializeSharedMode() {
+				namespaceSearch.classList.remove('hidden');
+				vmiSearch.classList.remove('hidden');
 				namespaceSelect.disabled = false;
 				vmiSelect.disabled = false;
+				connectButton.disabled = true;
+
+				namespaceSearch.addEventListener('input', () => {
+					const ns = renderNamespaceOptions(appState.namespaceList, namespaceSearch.value, namespaceSelect.value);
+					renderVmiOptions(ns, vmiSearch.value, vmiSelect.value, ns === '__ALL__' ? '' : ns);
+					syncQueryFromSelection();
+				});
+
 				namespaceSelect.addEventListener('change', () => {
-					renderVmiOptions(namespaceSelect.value);
-					if (appState.mode === 'shared') {
-						updateQuery(namespaceSelect.value, vmiSelect.value);
-					}
+					renderVmiOptions(namespaceSelect.value, vmiSearch.value, vmiSelect.value, namespaceSelect.value === '__ALL__' ? '' : namespaceSelect.value);
+					syncQueryFromSelection();
 				});
+
+				vmiSearch.addEventListener('input', () => {
+					renderVmiOptions(namespaceSelect.value, vmiSearch.value, vmiSelect.value, namespaceSelect.value === '__ALL__' ? '' : namespaceSelect.value);
+					syncQueryFromSelection();
+				});
+
 				vmiSelect.addEventListener('change', () => {
-					if (appState.mode === 'shared') {
-						updateQuery(namespaceSelect.value, vmiSelect.value);
-					}
+					updateConnectAvailability();
+					syncQueryFromSelection();
 				});
-				loadVmis().then(() => {
-					if (initialNamespaceParam) {
-						namespaceSelect.value = initialNamespaceParam;
-						renderVmiOptions(initialNamespaceParam);
-					}
-					if (initialVMIParam && vmiSelect.querySelector(`option[value="${initialVMIParam}"]`)) {
-						vmiSelect.value = initialVMIParam;
-					}
-					if (initialVMIParam) {
-						console.log('auto-connecting using URL parameters');
-						updateStatus('Preparing connection ...');
-						connect(namespaceSelect.value, initialVMIParam);
-					}
-				});
+
+				loadVmis();
 			}
 
 			function initialize() {
+				updateStatus('Loading console config ...');
 				fetch('/api/config')
 					.then(response => {
 						if (!response.ok) {
@@ -447,7 +570,7 @@
 						if (appState.mode === 'dedicated') {
 							initializeDedicatedMode(config);
 						} else {
-							initializeSharedMode(config);
+							initializeSharedMode();
 						}
 					})
 					.catch(err => {
