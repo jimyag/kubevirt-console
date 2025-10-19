@@ -62,12 +62,22 @@ kubectl port-forward -n kubevirt-console deploy/kubevirt-console 8080:80
 
 Then open `http://127.0.0.1:8080/` to reach the embedded xterm UI.
 
+### Expose with Ingress
+
+If your cluster runs an Ingress controller, publish the console through the sample manifest in `manifest/ingress.yaml`:
+
+```bash
+kubectl apply -f manifest/ingress.yaml
+```
+
+Before applying it, adjust the `spec.rules[].host` value (and TLS settings if needed) so it matches a domain you control. The provided annotations assume the NGINX Ingress controller and extend proxy timeouts to accommodate long-lived console sessions. Once the Ingress is created and DNS points to your controller, you can reach the UI at the configured host.
+
 ## Roadmap / TODO
 
 - [ ] Add authentication/authorization for the web console so only authorised users can reach VMI terminals.
 - [ ] Improve observability (structured logging, metrics, tracing) to support production deployments.
 - [ ] Introduce automated tests for CLI parsing and websocket handling to avoid regressions.
-- [ ] Enhance the frontend UX (namespace discovery, auto-complete, reconnect logic, multi-language support).
+- [ ] Polish the frontend UX (inline reconnect support, multi-language support, richer error hints).
 - [ ] Provide richer error reporting to distinguish between missing VMIs, RBAC denials, timeouts, etc.
 - [ ] Package the deployment as Helm/Kustomize for easier customisation.
 - [ ] Harden the release pipeline (security scanning, SBOM, multi-arch validation).
