@@ -40,6 +40,7 @@ jobs:
           goos: ${{ matrix.goos }}
           goarch: ${{ matrix.goarch }}
           build_command: "make build"
-          binary_name: "kubevirt-console"
-          extra_files: kubevirt-console
-          compress_assets: "OFF"
+          binary_name: kubevirt-console
+          compress_assets: "OFF" # only build binary, not assets
+          asset_name: "kubevirt-console-${{ matrix.goos }}-${{ matrix.goarch }}"
+          md5sum: FALSE # github release already provides sha256 checksum
