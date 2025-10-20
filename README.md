@@ -62,6 +62,16 @@ kubectl port-forward -n kubevirt-console deploy/kubevirt-console 8080:80
 
 Then open `http://127.0.0.1:8080/` to reach the embedded xterm UI.
 
+### Expose with NodePort
+
+For clusters without an Ingress controller, you can expose the service externally via `manifest/nodeport.yaml`:
+
+```bash
+kubectl apply -f manifest/nodeport.yaml
+```
+
+This creates a `NodePort` service on TCP port `30000`. Adjust `spec.ports[0].nodePort` (between 30000-32767 by default) to fit your environment, and make sure the corresponding port is reachable on your nodes. You can then access the console at `http://<node-external-ip>:<nodePort>/`.
+
 ### Expose with Ingress
 
 If your cluster runs an Ingress controller, publish the console through the sample manifest in `manifest/ingress.yaml`:
