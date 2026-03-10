@@ -595,6 +595,8 @@
 
 			syncSizeButton.addEventListener('click', function () {
 				if (ws && ws.readyState === WebSocket.OPEN) {
+					// ensure the UI has fitted
+					fitAddon.fit();
 					// Send the stty command to adjust the terminal size, wrapped with newlines to execute it.
 					// We add a short delay and clear line before to avoid mixing with existing prompt input
 					ws.send(`\x15stty cols ${term.cols} rows ${term.rows}\r`);
