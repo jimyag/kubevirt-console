@@ -128,12 +128,18 @@
 		#terminal {
 			flex: 1;
 			padding: 0.5rem;
+			position: relative;
 			overflow: hidden;
 			min-height: 0;
 			box-sizing: border-box;
 		}
-		.xterm {
+
+		#terminal .terminal {
 			height: 100%;
+		}
+		
+		.xterm .xterm-viewport {
+			background-color: #1b1b1b !important;
 		}
 	</style>
 </head>
@@ -610,8 +616,15 @@
 				}
 			});
 
+			let resizeTimeout;
 			window.addEventListener('resize', function () {
-				fitAddon.fit();
+				clearTimeout(resizeTimeout);
+				resizeTimeout = setTimeout(() => {
+					fitAddon.fit();
+					// If the user resizes the window, we don't automatically send stty 
+					// to avoid injecting text while they might be typing. 
+					// They should use the "Sync Size" button manually.
+				}, 100);
 			});
 
 			initialize();
