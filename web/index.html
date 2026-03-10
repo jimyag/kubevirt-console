@@ -128,6 +128,12 @@
 		#terminal {
 			flex: 1;
 			padding: 0.5rem;
+			overflow: hidden;
+			min-height: 0;
+			box-sizing: border-box;
+		}
+		.xterm {
+			height: 100%;
 		}
 	</style>
 </head>
@@ -150,6 +156,7 @@
 				</div>
 			</div>
 			<button id="connect-button" type="submit">Connect</button>
+			<button id="sync-size-button" type="button" disabled title="Send stty command to guest to sync terminal size">Sync Size</button>
 		</form>
 		<span id="status"></span>
 		<span id="alert-banner" role="alert"></span>
@@ -169,6 +176,7 @@
 			const namespaceSelect = document.getElementById('namespace');
 			const vmiSelect = document.getElementById('vmi');
 			const connectButton = document.getElementById('connect-button');
+			const syncSizeButton = document.getElementById('sync-size-button');
 			const form = document.getElementById('connect-form');
 			const params = new URLSearchParams(window.location.search);
 			const initialNamespaceParam = params.get('namespace') || '';
@@ -420,6 +428,7 @@
 					term.clear();
 					fitAddon.fit();
 					updateStatus('Connected', 'success');
+					syncSizeButton.disabled = false;
 					term.focus();
 				};
 
@@ -447,6 +456,7 @@
 					console.log('websocket closed', event);
 					const statusText = event.wasClean ? 'Connection closed' : 'Connection lost';
 					updateStatus(statusText, event.wasClean ? undefined : 'error');
+					syncSizeButton.disabled = true;
 				};
 			}
 
@@ -581,6 +591,15 @@
 			form.addEventListener('submit', function (event) {
 				event.preventDefault();
 				connect(namespaceSelect.value, vmiSelect.value);
+			});
+
+			syncSizeButton.addEventListener('click', function () {
+				if (ws && ws.readyState === WebSocket.OPEN) {
+					// Send the stty command to adjust the terminal size, wrapped with newlines to execute it.
+					// We add a short delay and clear line before to avoid mixing with existing prompt input
+					ws.send(`\x15stty cols ${term.cols} rows ${term.rows}\r`);
+					term.focus();
+				}
 			});
 
 			term.onData(function (data) {
