@@ -605,8 +605,8 @@
 					fitAddon.fit();
 					// Send the stty command to adjust the terminal size, wrapped with newlines to execute it.
 					// We add a short delay and clear line before to avoid mixing with existing prompt input
-					// We also set TERM=xterm-256color to enable rich colors in apps like htop
-					ws.send(`\x15stty cols ${term.cols} rows ${term.rows}; export TERM=xterm-256color\r`);
+					// We also set TERM=xterm-256color and LANG to enable rich colors and unicode in apps like htop
+					ws.send(`\x15export TERM=xterm-256color LANG=C.UTF-8; stty cols ${term.cols} rows ${term.rows}\r`);
 					term.focus();
 				}
 			});
