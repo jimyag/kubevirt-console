@@ -4,6 +4,7 @@ KubeVirt Console is a single self-contained Go binary that lets you attach to Vi
 
 - **Bring-your-own kubeconfig** – relies on the standard KubeVirt client-go configuration, so kubeconfig/env handling works out of the box.
 - **Terminal or browser** – connect directly from your shell, or launch an embedded web server that serves an xterm.js frontend.
+- **Rich terminal experience** – supports automatic window resizing synchronization and colorful output (TERM=xterm-256color) in the guest OS.
 - **No extra assets** – the web UI, JS, and CSS are embedded so the binary stays portable.
 
 ## Prerequisites
@@ -42,6 +43,8 @@ Visit `http://127.0.0.1:8080/` and fill in the namespace and VMI. The page autom
 
 ![Web console error screenshot](images/web-error.png)
 
+![Web console htop color screenshot](images/htop-color.png)
+
 ## Updating embedded web assets
 
 Instructions for refreshing xterm.js bundles live in `web/README.md`.
@@ -57,7 +60,7 @@ kubectl apply -f manifest/deploy.yaml
 After the pod is running, expose the web UI locally (for example):
 
 ```bash
-kubectl port-forward -n kubevirt-console deploy/kubevirt-console 8080:80
+kubectl port-forward -n kubevirt-console svc/kubevirt-console 8080:80
 ```
 
 Then open `http://127.0.0.1:8080/` to reach the embedded xterm UI.
