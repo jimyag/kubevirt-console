@@ -1,0 +1,15 @@
+.PHONY: build-ui build-go build clean
+
+BINARY_NAME=kubevirt-dashboard
+
+build: build-ui build-go
+
+build-ui:
+	cd dashboard/ui && bun run build
+
+build-go:
+	go build -o $(BINARY_NAME) ./dashboard
+
+clean:
+	rm -f $(BINARY_NAME)
+	rm -rf dashboard/ui/dist
