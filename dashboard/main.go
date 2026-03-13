@@ -5,6 +5,8 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
@@ -13,7 +15,9 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -22,6 +26,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"kubevirt.io/client-go/kubecli"
 	kvv1 "kubevirt.io/api/core/v1"
+	kvcorev1 "kubevirt.io/client-go/kubevirt/typed/core/v1"
 	"sigs.k8s.io/yaml"
 )
 
@@ -32,6 +37,10 @@ var (
 	contextName string
 	statusFile  = "vm-statuses.txt"
 )
+
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool { return true },
+}
 
 var defaultStatuses = []string{
 	"all", "Running", "Stopped", "Starting", "Migrating", "Paused", "ErrorPvcNotFound", "DataVolumeError", "ImagePullBackOff", "CrashLoopBackOff", "Terminating",
@@ -113,6 +122,11 @@ func runServer(config *rest.Config, virtClient kubecli.KubevirtClient, addr stri
 		json.NewEncoder(w).Encode(loadStatuses())
 	})
 
+	// Serial Console WebSocket
+	mux.HandleFunc("/api/v1/ws", func(w http.ResponseWriter, r *http.Request) {
+		handleWebsocket(virtClient, w, r)
+	})
+
 	mux.HandleFunc("/api/v1/yaml/", func(w http.ResponseWriter, r *http.Request) {
 		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/yaml/"), "/")
 		if len(parts) < 3 {
@@ -120,10 +134,8 @@ func runServer(config *rest.Config, virtClient kubecli.KubevirtClient, addr stri
 			return
 		}
 		resType, ns, name := parts[0], parts[1], parts[2]
-		
 		var gvr schema.GroupVersionResource
 		var apiVersion, kind string
-
 		if resType == "virtualmachines" {
 			gvr = schema.GroupVersionResource{Group: "kubevirt.io", Version: "v1", Resource: "virtualmachines"}
 			apiVersion, kind = "kubevirt.io/v1", "VirtualMachine"
@@ -134,23 +146,18 @@ func runServer(config *rest.Config, virtClient kubecli.KubevirtClient, addr stri
 			http.Error(w, "unsupported resource type", http.StatusBadRequest)
 			return
 		}
-
 		obj, err := dynClient.Resource(gvr).Namespace(ns).Get(context.Background(), name, metav1.GetOptions{})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
 		}
-
-		// Clean metadata
 		obj.SetManagedFields(nil)
 		obj.SetResourceVersion("")
 		obj.SetGeneration(0)
 		obj.SetUID("")
-		
 		raw := obj.UnstructuredContent()
 		raw["apiVersion"] = apiVersion
 		raw["kind"] = kind
-
 		data, _ := yaml.Marshal(raw)
 		w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
 		w.Write(data)
@@ -181,19 +188,90 @@ func runServer(config *rest.Config, virtClient kubecli.KubevirtClient, addr stri
 	return http.ListenAndServe(addr, mux)
 }
 
+func handleWebsocket(client kubecli.KubevirtClient, w http.ResponseWriter, r *http.Request) {
+	namespace := r.URL.Query().Get("namespace")
+	vmi := r.URL.Query().Get("vmi")
+	if namespace == "" || vmi == "" {
+		http.Error(w, "missing namespace or vmi", http.StatusBadRequest)
+		return
+	}
+
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("websocket upgrade failed: %v", err)
+		return
+	}
+	defer conn.Close()
+
+	stdinReader, stdinWriter := io.Pipe()
+	stdoutReader, stdoutWriter := io.Pipe()
+
+	resChan := make(chan error, 1)
+	runningChan := make(chan error, 1)
+
+	go func() {
+		console, err := client.VirtualMachineInstance(namespace).SerialConsole(vmi, &kvcorev1.SerialConsoleOptions{ConnectionTimeout: 10 * time.Minute})
+		runningChan <- err
+		if err != nil { return }
+		resChan <- console.Stream(kvcorev1.StreamOptions{ In: stdinReader, Out: stdoutWriter })
+	}()
+
+	if err := <-runningChan; err != nil {
+		_ = conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("serial console error: %v", err)))
+		return
+	}
+
+	_ = conn.WriteMessage(websocket.TextMessage, []byte("serial console ready"))
+	stdinWriter.Write([]byte("\r"))
+
+	writeErr := make(chan error, 1)
+	readErr := make(chan error, 1)
+
+	go func() {
+		buffer := make([]byte, 1024)
+		for {
+			n, err := stdoutReader.Read(buffer)
+			if n > 0 {
+				if sendErr := conn.WriteMessage(websocket.BinaryMessage, buffer[:n]); sendErr != nil {
+					writeErr <- sendErr
+					return
+				}
+			}
+			if err != nil { return }
+		}
+	}()
+
+	go func() {
+		for {
+			messageType, payload, err := conn.ReadMessage()
+			if err != nil {
+				readErr <- err
+				return
+			}
+			if messageType == websocket.TextMessage || messageType == websocket.BinaryMessage {
+				stdinWriter.Write(payload)
+			}
+		}
+	}()
+
+	select {
+	case <-resChan:
+	case <-writeErr:
+	case <-readErr:
+	}
+}
+
 func handleListVMs(client kubecli.KubevirtClient, w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	targetNs := q.Get("namespace")
 	if targetNs == "" || targetNs == "all" { targetNs = metav1.NamespaceAll }
 	nameSearch := strings.ToLower(q.Get("name"))
 	statusFilter := strings.ToLower(q.Get("status"))
-
 	vms, err := client.VirtualMachine(targetNs).List(context.Background(), metav1.ListOptions{})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
 	filtered := make([]kvv1.VirtualMachine, 0)
 	for _, vm := range vms.Items {
 		if nameSearch != "" && !strings.Contains(strings.ToLower(vm.Name), nameSearch) { continue }
