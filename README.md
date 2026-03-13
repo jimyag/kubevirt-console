@@ -1,98 +1,76 @@
-# KubeVirt Console
+# KubeVirt Dashboard
 
-KubeVirt Console is a single self-contained Go binary that lets you attach to VirtualMachineInstance (VMI) serial consoles from either a local terminal or a browser-based xterm.js UI.
+A lightweight, single-binary, and modern web-based management console for KubeVirt clusters.
 
-- **Bring-your-own kubeconfig** – relies on the standard KubeVirt client-go configuration, so kubeconfig/env handling works out of the box.
-- **Terminal or browser** – connect directly from your shell, or launch an embedded web server that serves an xterm.js frontend.
-- **Rich terminal experience** – supports automatic window resizing synchronization and colorful output (TERM=xterm-256color) in the guest OS.
-- **No extra assets** – the web UI, JS, and CSS are embedded so the binary stays portable.
+![Dashboard Overview](images/dashboard.png)
 
-## Prerequisites
+## Features
 
-- Access to a Kubernetes cluster with KubeVirt installed and an authenticated kubeconfig
+- **Multi-Cluster Support**: Manage multiple Kubernetes clusters by switching contexts directly from the UI.
+- **Cluster Dashboard**: High-level overview of nodes health, KubeVirt infrastructure stability, and resource distribution.
+- **VM Management**: List, start, stop, restart, and view detailed information of Virtual Machines.
+- **Serial Console**: High-performance, low-latency serial console using xterm.js with "Theater Mode".
+- **Storage Analytics**: View DataVolumes details, including total storage requests aggregated by namespace.
+- **Clean Manifests**: Integrated YAML viewer that automatically strips managed fields and internal metadata.
+- **Single Binary**: All static assets are embedded into the Go binary for easy deployment.
 
-## Build
+## UI Preview
 
-```bash
-go build -o kubevirt-dashboard .
-```
+### Virtual Machines List
+![Machines List](images/machines.png)
 
-## CLI usage
+### VM Detailed View
+![VM Detail](images/detail.png)
 
-Connect your local terminal to a VMI (similar to `virtctl console`):
+### High-Performance Serial Console
+![Serial Console](images/console.png)
 
-```bash
-./kubevirt-dashboard console [-n <namespace>] <vmi-name>
-```
+## Installation
 
-If you omit `-n/--namespace`, the namespace from the active kubeconfig context is used. Press `Ctrl+]` (escape sequence 29) to exit, or wait for the VMI to disconnect.
+### From Binary
 
-![Console mode screenshot](images/console.png)
-
-## Web console mode
-
-Serve the embedded UI and access the console through the browser:
+Download the latest binary from the [Releases](https://github.com/jimyag/kubevirt-dashboard/releases) page.
 
 ```bash
-./kubevirt-dashboard web --listen 127.0.0.1:8080
+# Run the dashboard (uses your local kubeconfig)
+./kubevirt-dashboard --listen 127.0.0.1:11111
 ```
 
-Visit `http://127.0.0.1:8080/` and fill in the namespace and VMI. The page automatically syncs those fields into the URL (so you can bookmark/share the link) and streams the serial console over WebSocket. If you leave the namespace empty, the server falls back to the namespace from your kubeconfig context. Terminal output includes connection status, and any errors are highlighted next to the Connect button.
+### In-Cluster Deployment
 
-![Web console screenshot](images/web.png)
-
-![Web console error screenshot](images/web-error.png)
-
-![Web console htop color screenshot](images/htop-color.png)
-
-## Updating embedded web assets
-
-Instructions for refreshing xterm.js bundles live in `web/README.md`.
-
-## Kubernetes deployment
-
-A sample manifest lives in `manifest/deploy.yaml`. It creates a dedicated namespace, service account, cluster-wide RBAC permitting access to `virtualmachineinstances/console`, a `Deployment`, and a `ClusterIP` Service listening on port 80 (forwarded to the pod's 8080). Apply it with:
+The dashboard can be deployed directly into your Kubernetes cluster:
 
 ```bash
 kubectl apply -f manifest/deploy.yaml
 ```
 
-After the pod is running, expose the web UI locally (for example):
+After deployment, expose it locally:
 
 ```bash
 kubectl port-forward -n kubevirt-dashboard svc/kubevirt-dashboard 8080:80
 ```
 
-Then open `http://127.0.0.1:8080/` to reach the embedded xterm UI.
+## Development
 
-### Expose with NodePort
+### Prerequisites
 
-For clusters without an Ingress controller, you can expose the service externally via `manifest/nodeport.yaml`:
+- Go 1.25+
+- Node.js & Bun (for frontend build)
 
-```bash
-kubectl apply -f manifest/nodeport.yaml
-```
-
-This creates a `NodePort` service on TCP port `30000`. Adjust `spec.ports[0].nodePort` (between 30000-32767 by default) to fit your environment, and make sure the corresponding port is reachable on your nodes. You can then access the console at `http://<node-external-ip>:<nodePort>/`.
-
-### Expose with Ingress
-
-If your cluster runs an Ingress controller, publish the console through the sample manifest in `manifest/ingress.yaml`:
+### Build from source
 
 ```bash
-kubectl apply -f manifest/ingress.yaml
+# Build both UI and Go binary
+make build
 ```
 
-Before applying it, adjust the `spec.rules[].host` value (and TLS settings if needed) so it matches a domain you control. The provided annotations assume the NGINX Ingress controller and extend proxy timeouts to accommodate long-lived console sessions. Once the Ingress is created and DNS points to your controller, you can reach the UI at the configured host.
+### Running locally
 
-## Roadmap / TODO
+```bash
+# Start backend
+go run . --listen 127.0.0.1:11111
+```
 
-- [ ] Add authentication/authorization for the web console so only authorised users can reach VMI terminals.
-- [ ] Improve observability (structured logging, metrics, tracing) to support production deployments.
-- [ ] Introduce automated tests for CLI parsing and websocket handling to avoid regressions.
-- [ ] Polish the frontend UX (inline reconnect support, multi-language support, richer error hints).
-- [ ] Provide richer error reporting to distinguish between missing VMIs, RBAC denials, timeouts, etc.
-- [ ] Package the deployment as Helm/Kustomize for easier customisation.
-- [ ] Harden the release pipeline (security scanning, SBOM, multi-arch validation).
-- [ ] Document more operational guidance (troubleshooting, FAQ, configuration examples).
-- [ ] Prototype an operator/CRD-based flow for auto-provisioning per-VMI console pods while keeping the shared deployment as the default.
+## License
+
+MIT

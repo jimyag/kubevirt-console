@@ -1,9 +1,9 @@
 # Stage 1: Build Frontend
 FROM oven/bun:latest AS ui-builder
-WORKDIR /app/dashboard/ui
-COPY dashboard/ui/package.json dashboard/ui/bun.lock ./
+WORKDIR /app/ui
+COPY ui/package.json ui/bun.lock ./
 RUN bun install --frozen-lockfile
-COPY dashboard/ui/ .
+COPY ui/ .
 RUN bun run build
 
 # Stage 2: Build Backend
@@ -18,7 +18,7 @@ RUN go mod download
 
 # Copy the entire source and the built UI
 COPY . .
-COPY --from=ui-builder /app/dashboard/ui/dist ./dashboard/ui/dist
+COPY --from=ui-builder /app/ui/dist ./ui/dist
 
 RUN CGO_ENABLED=0 go build -trimpath -v -ldflags "-s -w \
 	-X github.com/jimmicro/version.GitTag=${GIT_TAG} \

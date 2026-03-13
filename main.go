@@ -1,357 +1,318 @@
 package main
 
 import (
-	"embed"
+	_ "embed"
+	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
 	"log"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
-	"os/signal"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/jimmicro/version"
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
-	"golang.org/x/term"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"kubevirt.io/client-go/kubecli"
+	kvv1 "kubevirt.io/api/core/v1"
 	kvcorev1 "kubevirt.io/client-go/kubevirt/typed/core/v1"
+	"sigs.k8s.io/yaml"
 )
 
 var (
-	timeout          time.Duration
-	namespace        string
-	listenAddr       string
-	webNamespaceFlag string
-	webVMIFlag       string
+	listenAddr  string
+	namespace   string
+	kubeconfig  string
+	contextName string
+	statusFile  = "vm-statuses.txt"
 )
-
-//go:embed web/* web/assets/*
-var webContent embed.FS
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
+var defaultStatuses = []string{
+	"all", "Running", "Stopped", "Starting", "Migrating", "Paused", "ErrorPvcNotFound", "DataVolumeError", "ImagePullBackOff", "CrashLoopBackOff", "Terminating",
+}
+
+// ClusterManager handles multiple kubeconfig contexts
+type ClusterManager struct {
+	mu       sync.RWMutex
+	configs  map[string]*rest.Config
+	clients  map[string]kubecli.KubevirtClient
+	proxies  map[string]*httputil.ReverseProxy
+	dynamics map[string]dynamic.Interface
+	contexts []string
+	defaultCtx string
+}
+
+func NewClusterManager() (*ClusterManager, error) {
+	cm := &ClusterManager{
+		configs:  make(map[string]*rest.Config),
+		clients:  make(map[string]kubecli.KubevirtClient),
+		proxies:  make(map[string]*httputil.ReverseProxy),
+		dynamics: make(map[string]dynamic.Interface),
+	}
+
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	if kubeconfig != "" {
+		loadingRules.ExplicitPath = kubeconfig
+	}
+
+	config, err := loadingRules.Load()
+	if err != nil {
+		// Fallback to in-cluster if possible
+		log.Printf("Failed to load kubeconfig: %v. Checking in-cluster config...", err)
+		restConfig, err := rest.InClusterConfig()
+		if err != nil {
+			return nil, fmt.Errorf("could not find kubeconfig or in-cluster config: %v", err)
+		}
+		cm.contexts = []string{"in-cluster"}
+		cm.defaultCtx = "in-cluster"
+		cm.configs["in-cluster"] = restConfig
+		return cm, nil
+	}
+
+	for name := range config.Contexts {
+		cm.contexts = append(cm.contexts, name)
+	}
+	sort.Strings(cm.contexts)
+	cm.defaultCtx = config.CurrentContext
+	if contextName != "" {
+		cm.defaultCtx = contextName
+	}
+
+	return cm, nil
+}
+
+func (cm *ClusterManager) getClient(r *http.Request) (kubecli.KubevirtClient, dynamic.Interface, *httputil.ReverseProxy, error) {
+	ctxName := r.Header.Get("X-Kube-Context")
+	if ctxName == "" {
+		ctxName = r.URL.Query().Get("context")
+	}
+	if ctxName == "" {
+		ctxName = cm.defaultCtx
+	}
+
+	cm.mu.RLock()
+	client, ok := cm.clients[ctxName]
+	dyn, ok2 := cm.dynamics[ctxName]
+	proxy, ok3 := cm.proxies[ctxName]
+	cm.mu.RUnlock()
+
+	if ok && ok2 && ok3 {
+		return client, dyn, proxy, nil
+	}
+
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	// Re-check after lock
+	if client, ok := cm.clients[ctxName]; ok {
+		return client, cm.dynamics[ctxName], cm.proxies[ctxName], nil
+	}
+
+	log.Printf("Initializing clients for context: %s", ctxName)
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	if kubeconfig != "" {
+		loadingRules.ExplicitPath = kubeconfig
+	}
+	configOverrides := &clientcmd.ConfigOverrides{CurrentContext: ctxName}
+	clientConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
+	
+	restConfig, err := clientConfig.ClientConfig()
+	if err != nil {
+		// If explicit context fail, fallback to in-cluster or default
+		if ctxName == "in-cluster" {
+			restConfig, err = rest.InClusterConfig()
+		}
+		if err != nil { return nil, nil, nil, err }
+	}
+
+	virtClient, err := kubecli.GetKubevirtClientFromRESTConfig(restConfig)
+	if err != nil { return nil, nil, nil, err }
+
+	dynClient, err := dynamic.NewForConfig(restConfig)
+	if err != nil { return nil, nil, nil, err }
+
+	target, _ := url.Parse(restConfig.Host)
+	transport, _ := rest.TransportFor(restConfig)
+	proxy = httputil.NewSingleHostReverseProxy(target)
+	proxy.Transport = transport
+
+	cm.configs[ctxName] = restConfig
+	cm.clients[ctxName] = virtClient
+	cm.dynamics[ctxName] = dynClient
+	cm.proxies[ctxName] = proxy
+
+	return virtClient, dynClient, proxy, nil
+}
+
 var rootCmd = &cobra.Command{
-	Use:           "kubevirt-dashboard",
-	Short:         "Connect to KubeVirt VMI serial consoles",
-	Long:          "Connect to KubeVirt VirtualMachineInstance serial consoles from your terminal or an embedded web UI.",
-	SilenceErrors: false,
-	SilenceUsage:  true,
-	Version:       version.Version(),
-}
-
-var consoleCmd = &cobra.Command{
-	Use:   "console [flags] <vmi>",
-	Short: "Attach to a VMI serial console in the terminal",
-	Args:  cobra.ExactArgs(1),
-	Example: `  kubevirt-dashboard console --namespace demo test
-  kubevirt-dashboard console -n demo test --timeout 5m
-  kubevirt-dashboard console test # namespace inferred from kubeconfig`,
+	Use:   "kubevirt-dashboard",
+	Short: "KubeVirt Dashboard - Multi-Cluster Management",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		vmiName := args[0]
-		virtClient, defaultNamespace, err := newVirtClient()
-		if err != nil {
-			return err
-		}
-		ns := namespace
-		if ns == "" {
-			ns = defaultNamespace
-		}
-		if ns == "" {
-			return fmt.Errorf("namespace is required (pass --namespace or set one in your kubeconfig context)")
-		}
-		if err := handleConsoleConnection(virtClient, ns, vmiName, timeout); err != nil {
-			return fmt.Errorf("error connecting to console: %w", err)
-		}
-		fmt.Println("Console connected successfully")
-		return nil
-	},
-}
-
-var webCmd = &cobra.Command{
-	Use:   "web",
-	Short: "Serve the browser-based serial console",
-	Example: `  kubevirt-dashboard web --listen :8080
-  kubevirt-dashboard web --listen 127.0.0.1:8080 --timeout 5m
-  kubevirt-dashboard web --namespace prod --vmi vm-01 # dedicated console`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		virtClient, defaultNamespace, err := newVirtClient()
-		if err != nil {
-			return err
-		}
-		initialNamespace := webNamespaceFlag
-		if initialNamespace == "" {
-			initialNamespace = defaultNamespace
-		}
-		fixedNamespace := ""
-		if webVMIFlag != "" {
-			if initialNamespace == "" {
-				return fmt.Errorf("namespace is required when --vmi is specified and no default namespace is available")
-			}
-			fixedNamespace = initialNamespace
-		}
-		return runWebServer(virtClient, listenAddr, timeout, defaultNamespace, initialNamespace, fixedNamespace, webVMIFlag)
+		cm, err := NewClusterManager()
+		if err != nil { return err }
+		ensureStatusFile()
+		return runServer(cm, listenAddr)
 	},
 }
 
 func init() {
-	timeout = 10 * time.Minute
-	rootCmd.PersistentFlags().DurationVar(&timeout, "timeout", timeout, "timeout for establishing the console connection (e.g. 10m)")
-
-	consoleCmd.Flags().StringVarP(&namespace, "namespace", "n", "", "namespace of the virtual machine instance")
-
-	webCmd.Flags().StringVar(&listenAddr, "listen", "127.0.0.1:8080", "address to serve the web console on")
-	webCmd.Flags().StringVar(&webNamespaceFlag, "namespace", "", "default namespace for the web console (defaults to kubeconfig namespace)")
-	webCmd.Flags().StringVar(&webVMIFlag, "vmi", "", "serve a dedicated console for the specified VMI")
-
-	rootCmd.AddCommand(consoleCmd)
-	rootCmd.AddCommand(webCmd)
+	rootCmd.Flags().StringVar(&listenAddr, "listen", "127.0.0.1:11111", "address to serve the dashboard on")
+	rootCmd.Flags().StringVarP(&namespace, "namespace", "n", "", "default namespace (optional)")
+	rootCmd.Flags().StringVar(&kubeconfig, "kubeconfig", "", "absolute path to the kubeconfig file")
+	rootCmd.Flags().StringVar(&contextName, "context", "", "the name of the kubeconfig context to use")
 }
 
 func main() {
-	if err := rootCmd.Execute(); err != nil {
-		os.Exit(1)
+	if err := rootCmd.Execute(); err != nil { os.Exit(1) }
+}
+
+func ensureStatusFile() {
+	if _, err := os.Stat(statusFile); os.IsNotExist(err) {
+		f, _ := os.Create(statusFile)
+		defer f.Close()
+		for _, s := range defaultStatuses { f.WriteString(s + "\n") }
 	}
 }
 
-func handleConsoleConnection(client kubecli.KubevirtClient, namespace, vmi string, timeout time.Duration) error {
-	// in -> stdinWriter | stdinReader -> console
-	// out <- stdoutReader | stdoutWriter <- console
-	// Wait until the virtual machine is in running phase, user interrupt or timeout
-	stdinReader, stdinWriter := io.Pipe()
-	stdoutReader, stdoutWriter := io.Pipe()
+func loadStatuses() []string {
+	f, err := os.Open(statusFile)
+	if err != nil { return defaultStatuses }
+	defer f.Close()
+	var statuses []string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line != "" { statuses = append(statuses, line) }
+	}
+	return statuses
+}
 
-	resChan := make(chan error)
-	runningChan := make(chan error)
-	waitInterrupt := make(chan os.Signal, 1)
-	signal.Notify(waitInterrupt, os.Interrupt)
+func runServer(cm *ClusterManager, addr string) error {
+	distFS, _ := fs.Sub(uiContent, "ui/dist")
+	mux := http.NewServeMux()
 
-	go func() {
-		con, err := client.VirtualMachineInstance(namespace).SerialConsole(vmi,
-			&kvcorev1.SerialConsoleOptions{ConnectionTimeout: timeout})
-		runningChan <- err
+	mux.HandleFunc("/api/v1/contexts", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"contexts": cm.contexts,
+			"default":  cm.defaultCtx,
+		})
+	})
 
-		if err != nil {
+	mux.HandleFunc("/api/v1/vms", func(w http.ResponseWriter, r *http.Request) {
+		virtClient, _, _, err := cm.getClient(r)
+		if err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
+		handleListVMs(virtClient, w, r)
+	})
+
+	mux.HandleFunc("/api/v1/vm-statuses", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(loadStatuses())
+	})
+
+	mux.HandleFunc("/api/v1/ws", func(w http.ResponseWriter, r *http.Request) {
+		virtClient, _, _, err := cm.getClient(r)
+		if err != nil { log.Printf("ws client fail: %v", err); return }
+		handleWebsocket(virtClient, w, r)
+	})
+
+	mux.HandleFunc("/api/v1/yaml/", func(w http.ResponseWriter, r *http.Request) {
+		_, dynClient, _, err := cm.getClient(r)
+		if err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
+
+		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/yaml/"), "/")
+		if len(parts) < 3 {
+			http.Error(w, "invalid path", http.StatusBadRequest)
 			return
 		}
-
-		resChan <- con.Stream(kvcorev1.StreamOptions{
-			In:  stdinReader,
-			Out: stdoutWriter,
-		})
-	}()
-
-	select {
-	case <-waitInterrupt:
-		// Make a new line in the terminal
-		fmt.Println()
-		return nil
-	case err := <-runningChan:
+		resType, ns, name := parts[0], parts[1], parts[2]
+		var gvr schema.GroupVersionResource
+		var apiVersion, kind string
+		if resType == "virtualmachines" {
+			gvr = schema.GroupVersionResource{Group: "kubevirt.io", Version: "v1", Resource: "virtualmachines"}
+			apiVersion, kind = "kubevirt.io/v1", "VirtualMachine"
+		} else if resType == "datavolumes" {
+			gvr = schema.GroupVersionResource{Group: "cdi.kubevirt.io", Version: "v1beta1", Resource: "datavolumes"}
+			apiVersion, kind = "cdi.kubevirt.io/v1beta1", "DataVolume"
+		} else {
+			http.Error(w, "unsupported resource type", http.StatusBadRequest)
+			return
+		}
+		obj, err := dynClient.Resource(gvr).Namespace(ns).Get(context.Background(), name, metav1.GetOptions{})
 		if err != nil {
-			return err
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
 		}
-	}
-	err := Attach(stdinReader, stdoutReader, stdinWriter, stdoutWriter,
-		fmt.Sprintf("Successfully connected to %s console. Press Ctrl+] or Ctrl+5 to exit console.\n", vmi),
-		resChan)
-	if err != nil {
-		if e, ok := err.(*websocket.CloseError); ok && e.Code == websocket.CloseAbnormalClosure {
-			fmt.Fprint(os.Stderr, "\n"+
-				"You were disconnected from the console. This could be caused by one of the following:"+
-				"\n - the target VM was powered off"+
-				"\n - another user connected to the console of the target VM"+
-				"\n - network issues\n")
-		}
-		return err
-	}
-	return nil
-}
+		obj.SetManagedFields(nil)
+		obj.SetResourceVersion("")
+		obj.SetGeneration(0)
+		obj.SetUID("")
+		raw := obj.UnstructuredContent()
+		raw["apiVersion"] = apiVersion
+		raw["kind"] = kind
+		data, _ := yaml.Marshal(raw)
+		w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
+		w.Write(data)
+	})
 
-// Attach attaches stdin and stdout to the console
-// in -> stdinWriter | stdinReader -> console
-// out <- stdoutReader | stdoutWriter <- console
-// copied from https://github.com/kubevirt/kubevirt/blob/2fe8900d08037dddf5b54d5d4395110e6d77b315/pkg/virtctl/console/console.go#L134-L141
-func Attach(stdinReader, stdoutReader *io.PipeReader, stdinWriter, stdoutWriter *io.PipeWriter,
-	message string, resChan <-chan error,
-) (err error) {
-	const (
-		escapeSequenceCode = 29
-		bufferSize         = 1024
-	)
-	stopChan := make(chan struct{}, 1)
-	writeStop := make(chan error)
-	readStop := make(chan error)
-	if term.IsTerminal(int(os.Stdin.Fd())) {
-		state, makeRawErr := term.MakeRaw(int(os.Stdin.Fd()))
-		if makeRawErr != nil {
-			return fmt.Errorf("make raw terminal failed: %s", makeRawErr)
-		}
-		defer func() {
-			if restoreErr := term.Restore(int(os.Stdin.Fd()), state); restoreErr != nil {
-				fmt.Fprintf(os.Stderr, "failed to restore terminal: %v\n", restoreErr)
-			}
-		}()
-	}
-	fmt.Fprint(os.Stderr, message)
+	mux.HandleFunc("/api/v1/namespaces-list", func(w http.ResponseWriter, r *http.Request) {
+		virtClient, _, _, err := cm.getClient(r)
+		if err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
+		vms, _ := virtClient.VirtualMachine(metav1.NamespaceAll).List(context.Background(), metav1.ListOptions{})
+		nsMap := make(map[string]bool)
+		for _, vm := range vms.Items { nsMap[vm.Namespace] = true }
+		nss := []string{"all"}
+		for ns := range nsMap { nss = append(nss, ns) }
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(nss)
+	})
 
-	in := os.Stdin
-	out := os.Stdout
+	mux.HandleFunc("/apis/", func(w http.ResponseWriter, r *http.Request) {
+		_, _, proxy, err := cm.getClient(r)
+		if err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
+		proxy.ServeHTTP(w, r)
+	})
 
-	go func() {
-		interrupt := make(chan os.Signal, 1)
-		signal.Notify(interrupt, os.Interrupt)
-		<-interrupt
-		close(stopChan)
-	}()
+	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+		_, _, proxy, err := cm.getClient(r)
+		if err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
+		proxy.ServeHTTP(w, r)
+	})
 
-	go func() {
-		_, copyErr := io.Copy(out, stdoutReader)
-		readStop <- copyErr
-	}()
+	fileServer := http.FileServer(http.FS(distFS))
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if strings.HasPrefix(path, "/api") || strings.HasPrefix(path, "/apis") { return }
+		f, err := distFS.Open(strings.TrimPrefix(path, "/"))
+		if err != nil || path == "/" { r.URL.Path = "/" } else { f.Close() }
+		fileServer.ServeHTTP(w, r)
+	})
 
-	go func() {
-		defer close(writeStop)
-		buf := make([]byte, bufferSize)
-		for {
-			// reading from stdin
-			n, readErr := in.Read(buf)
-			if readErr != nil && readErr != io.EOF {
-				writeStop <- readErr
-				return
-			}
-			if n == 0 && readErr == io.EOF {
-				return
-			}
-
-			// the escape sequence
-			if buf[0] == escapeSequenceCode {
-				return
-			}
-			// Writing out to the console connection
-			_, err = stdinWriter.Write(buf[0:n])
-			if err == io.EOF {
-				return
-			}
-		}
-	}()
-
-	select {
-	case <-stopChan:
-	case err = <-readStop:
-	case err = <-writeStop:
-	case err = <-resChan:
-	}
-
-	return err
-}
-
-func newVirtClient() (kubecli.KubevirtClient, string, error) {
-	fs := pflag.NewFlagSet("kubevirt-dashboard", pflag.ContinueOnError)
-	clientConfig := kubecli.DefaultClientConfig(fs)
-	ns, _, err := clientConfig.Namespace()
-	if err != nil {
-		if !clientcmd.IsEmptyConfig(err) {
-			return nil, "", fmt.Errorf("error resolving namespace from kubeconfig: %w", err)
-		}
-		ns = ""
-	}
-	restConfig, err := clientConfig.ClientConfig()
-	if err != nil {
-		return nil, "", fmt.Errorf("error getting client config: %w", err)
-	}
-	virtClient, err := kubecli.GetKubevirtClientFromRESTConfig(restConfig)
-	if err != nil {
-		return nil, "", fmt.Errorf("cannot obtain KubeVirt client: %w", err)
-	}
-	return virtClient, ns, nil
-}
-
-type webServer struct {
-	client           kubecli.KubevirtClient
-	timeout          time.Duration
-	defaultNamespace string
-	initialNamespace string
-	fixedNamespace   string
-	fixedVMI         string
-}
-
-func runWebServer(client kubecli.KubevirtClient, addr string, timeout time.Duration, defaultNamespace, initialNamespace, fixedNamespace, fixedVMI string) error {
-	contentFS, err := fs.Sub(webContent, "web")
-	if err != nil {
-		return fmt.Errorf("failed to load embedded web assets: %w", err)
-	}
-
-	if initialNamespace == "" {
-		initialNamespace = defaultNamespace
-	}
-
-	server := &webServer{
-		client:           client,
-		timeout:          timeout,
-		defaultNamespace: defaultNamespace,
-		initialNamespace: initialNamespace,
-		fixedNamespace:   fixedNamespace,
-		fixedVMI:         fixedVMI,
-	}
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", server.handleWebsocket)
-	mux.HandleFunc("/api/config", server.handleConfig)
-	mux.HandleFunc("/api/vmis", server.handleVMIs)
-	mux.Handle("/", http.FileServer(http.FS(contentFS)))
-
-	log.Printf("Serving web console at http://%s/ (mode=%s)", addr, server.mode())
+	log.Printf("Starting Dashboard at http://%s (Contexts: %v)", addr, cm.contexts)
 	return http.ListenAndServe(addr, mux)
 }
 
-func (s *webServer) mode() string {
-	if s.fixedVMI != "" {
-		return "dedicated"
-	}
-	return "shared"
-}
-
-func (s *webServer) resolvedNamespace(requested string) string {
-	if s.fixedVMI != "" {
-		if s.fixedNamespace != "" {
-			return s.fixedNamespace
-		}
-		return s.defaultNamespace
-	}
-	if requested != "" {
-		return requested
-	}
-	if s.initialNamespace != "" {
-		return s.initialNamespace
-	}
-	return s.defaultNamespace
-}
-
-func (s *webServer) handleWebsocket(w http.ResponseWriter, r *http.Request) {
-	namespace := strings.TrimSpace(r.URL.Query().Get("namespace"))
-	vmi := strings.TrimSpace(r.URL.Query().Get("vmi"))
-
-	if s.fixedVMI != "" {
-		namespace = s.resolvedNamespace("")
-		vmi = s.fixedVMI
-	} else {
-		if vmi == "" {
-			http.Error(w, "vmi query parameter is required", http.StatusBadRequest)
-			return
-		}
-		namespace = s.resolvedNamespace(namespace)
-	}
-
-	if namespace == "" {
-		http.Error(w, "namespace cannot be determined", http.StatusBadRequest)
+func handleWebsocket(client kubecli.KubevirtClient, w http.ResponseWriter, r *http.Request) {
+	namespace := r.URL.Query().Get("namespace")
+	vmi := r.URL.Query().Get("vmi")
+	if namespace == "" || vmi == "" {
+		http.Error(w, "missing namespace or vmi", http.StatusBadRequest)
 		return
 	}
 
@@ -361,7 +322,6 @@ func (s *webServer) handleWebsocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
-	log.Printf("websocket connected: remote=%s namespace=%s vmi=%s", r.RemoteAddr, namespace, vmi)
 
 	stdinReader, stdinWriter := io.Pipe()
 	stdoutReader, stdoutWriter := io.Pipe()
@@ -370,29 +330,19 @@ func (s *webServer) handleWebsocket(w http.ResponseWriter, r *http.Request) {
 	runningChan := make(chan error, 1)
 
 	go func() {
-		console, err := s.client.VirtualMachineInstance(namespace).SerialConsole(vmi,
-			&kvcorev1.SerialConsoleOptions{ConnectionTimeout: s.timeout})
+		console, err := client.VirtualMachineInstance(namespace).SerialConsole(vmi, &kvcorev1.SerialConsoleOptions{ConnectionTimeout: 10 * time.Minute})
 		runningChan <- err
-		if err != nil {
-			return
-		}
-
-		resChan <- console.Stream(kvcorev1.StreamOptions{
-			In:  stdinReader,
-			Out: stdoutWriter,
-		})
+		if err != nil { return }
+		resChan <- console.Stream(kvcorev1.StreamOptions{ In: stdinReader, Out: stdoutWriter })
 	}()
 
 	if err := <-runningChan; err != nil {
-		log.Printf("failed to establish serial console: %v", err)
 		_ = conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("serial console error: %v", err)))
 		return
 	}
-	log.Printf("serial console stream established for %s/%s", namespace, vmi)
+
 	_ = conn.WriteMessage(websocket.TextMessage, []byte("serial console ready"))
-	if _, err := stdinWriter.Write([]byte("\r")); err != nil {
-		log.Printf("failed to send initial newline to console: %v", err)
-	}
+	stdinWriter.Write([]byte("\r"))
 
 	writeErr := make(chan error, 1)
 	readErr := make(chan error, 1)
@@ -403,16 +353,11 @@ func (s *webServer) handleWebsocket(w http.ResponseWriter, r *http.Request) {
 			n, err := stdoutReader.Read(buffer)
 			if n > 0 {
 				if sendErr := conn.WriteMessage(websocket.BinaryMessage, buffer[:n]); sendErr != nil {
-					writeErr <- fmt.Errorf("send to websocket failed: %w", sendErr)
+					writeErr <- sendErr
 					return
 				}
 			}
-			if err != nil {
-				if err != io.EOF {
-					writeErr <- err
-				}
-				return
-			}
+			if err != nil { return }
 		}
 	}()
 
@@ -423,118 +368,40 @@ func (s *webServer) handleWebsocket(w http.ResponseWriter, r *http.Request) {
 				readErr <- err
 				return
 			}
-			if messageType != websocket.TextMessage && messageType != websocket.BinaryMessage {
-				continue
-			}
-			if len(payload) == 1 && payload[0] == 29 {
-				readErr <- io.EOF
-				return
-			}
-			if _, err := stdinWriter.Write(payload); err != nil {
-				readErr <- err
-				return
+			if messageType == websocket.TextMessage || messageType == websocket.BinaryMessage {
+				stdinWriter.Write(payload)
 			}
 		}
 	}()
 
 	select {
-	case err := <-resChan:
-		if err != nil && err != io.EOF {
-			log.Printf("serial console stream error: %v", err)
-			_ = conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("serial console error: %v", err)))
-		}
-	case err := <-writeErr:
-		if err != nil && err != io.EOF {
-			log.Printf("console write loop error: %v", err)
-			_ = conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("console write error: %v", err)))
-		}
-	case err := <-readErr:
-		if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
-			break
-		}
-		log.Printf("console read loop error: %v", err)
-		_ = conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("console read error: %v", err)))
-	}
-
-	_ = stdinWriter.Close()
-	_ = stdoutWriter.Close()
-	_ = stdinReader.Close()
-	_ = stdoutReader.Close()
-	log.Printf("websocket disconnected: namespace=%s vmi=%s", namespace, vmi)
-}
-
-func (s *webServer) handleConfig(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	response := struct {
-		Mode             string `json:"mode"`
-		DefaultNamespace string `json:"defaultNamespace,omitempty"`
-		InitialNamespace string `json:"initialNamespace,omitempty"`
-		FixedNamespace   string `json:"fixedNamespace,omitempty"`
-		FixedVMI         string `json:"fixedVmi,omitempty"`
-	}{
-		Mode:             s.mode(),
-		DefaultNamespace: s.defaultNamespace,
-		InitialNamespace: s.initialNamespace,
-		FixedNamespace:   s.fixedNamespace,
-		FixedVMI:         s.fixedVMI,
-	}
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Printf("failed to write config response: %v", err)
+	case <-resChan:
+	case <-writeErr:
+	case <-readErr:
 	}
 }
 
-func (s *webServer) handleVMIs(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
-	if s.fixedVMI != "" {
-		ns := s.resolvedNamespace("")
-		vmi := s.fixedVMI
-		if ns == "" {
-			http.Error(w, "namespace cannot be determined", http.StatusBadRequest)
-			return
-		}
-		list := []map[string]string{
-			{
-				"namespace": ns,
-				"name":      vmi,
-			},
-		}
-		if err := json.NewEncoder(w).Encode(list); err != nil {
-			log.Printf("failed to write dedicated vmi response: %v", err)
-		}
-		return
-	}
-
-	nsParam := strings.TrimSpace(r.URL.Query().Get("namespace"))
-	targetNamespace := nsParam
-	if targetNamespace == "" || strings.EqualFold(targetNamespace, "all") {
-		targetNamespace = metav1.NamespaceAll
-	}
-
-	ctx := r.Context()
-	vmiClient := s.client.VirtualMachineInstance(targetNamespace)
-	list, err := vmiClient.List(ctx, metav1.ListOptions{})
+func handleListVMs(client kubecli.KubevirtClient, w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	targetNs := q.Get("namespace")
+	if targetNs == "" || targetNs == "all" { targetNs = metav1.NamespaceAll }
+	nameSearch := strings.ToLower(q.Get("name"))
+	statusFilter := strings.ToLower(q.Get("status"))
+	vms, err := client.VirtualMachine(targetNs).List(context.Background(), metav1.ListOptions{})
 	if err != nil {
-		http.Error(w, fmt.Sprintf("failed to list VMIs: %v", err), http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	type vmiInfo struct {
-		Namespace string `json:"namespace"`
-		Name      string `json:"name"`
-		Phase     string `json:"phase,omitempty"`
+	filtered := make([]kvv1.VirtualMachine, 0)
+	for _, vm := range vms.Items {
+		if nameSearch != "" && !strings.Contains(strings.ToLower(vm.Name), nameSearch) { continue }
+		printableStatus := strings.ToLower(string(vm.Status.PrintableStatus))
+		if statusFilter != "" && statusFilter != "all" {
+			if !strings.Contains(printableStatus, statusFilter) { continue }
+		}
+		filtered = append(filtered, vm)
 	}
-
-	result := make([]vmiInfo, 0, len(list.Items))
-	for _, item := range list.Items {
-		result = append(result, vmiInfo{
-			Namespace: item.Namespace,
-			Name:      item.Name,
-			Phase:     string(item.Status.Phase),
-		})
-	}
-
-	if err := json.NewEncoder(w).Encode(result); err != nil {
-		log.Printf("failed to write vmi list response: %v", err)
-	}
+	sort.Slice(filtered, func(i, j int) bool { return filtered[i].CreationTimestamp.After(filtered[j].CreationTimestamp.Time) })
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{ "items": filtered })
 }

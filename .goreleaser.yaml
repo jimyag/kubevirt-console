@@ -6,7 +6,7 @@ before:
 
 builds:
   - id: kubevirt-dashboard
-    main: ./dashboard
+    main: .
     binary: kubevirt-dashboard
     env:
       - CGO_ENABLED=0
