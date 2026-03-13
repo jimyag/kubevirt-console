@@ -49,5 +49,3 @@ dockers:
       - "--label=org.opencontainers.image.title={{ .ProjectName }}"
       - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
       - "--label=org.opencontainers.image.version={{ .Version }}"
-      - "--build-arg=GIT_TAG={{ .Tag }}"
-      - "--build-arg=BUILD_TIME={{ .Date }}"

@@ -14,8 +14,8 @@ build-ui:
 build-go:
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY_NAME) .
 
-image:
-	docker build --build-arg GIT_TAG=$(GIT_TAG) --build-arg BUILD_TIME=$(BUILD_TIME) -t $(IMAGE):latest .
+image: build
+	docker build -t $(IMAGE):latest .
 
 clean:
 	rm -f $(BINARY_NAME)
