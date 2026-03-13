@@ -40,7 +40,7 @@ var upgrader = websocket.Upgrader{
 }
 
 var rootCmd = &cobra.Command{
-	Use:           "kubevirt-console",
+	Use:           "kubevirt-dashboard",
 	Short:         "Connect to KubeVirt VMI serial consoles",
 	Long:          "Connect to KubeVirt VirtualMachineInstance serial consoles from your terminal or an embedded web UI.",
 	SilenceErrors: false,
@@ -52,9 +52,9 @@ var consoleCmd = &cobra.Command{
 	Use:   "console [flags] <vmi>",
 	Short: "Attach to a VMI serial console in the terminal",
 	Args:  cobra.ExactArgs(1),
-	Example: `  kubevirt-console console --namespace demo test
-  kubevirt-console console -n demo test --timeout 5m
-  kubevirt-console console test # namespace inferred from kubeconfig`,
+	Example: `  kubevirt-dashboard console --namespace demo test
+  kubevirt-dashboard console -n demo test --timeout 5m
+  kubevirt-dashboard console test # namespace inferred from kubeconfig`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		vmiName := args[0]
 		virtClient, defaultNamespace, err := newVirtClient()
@@ -79,9 +79,9 @@ var consoleCmd = &cobra.Command{
 var webCmd = &cobra.Command{
 	Use:   "web",
 	Short: "Serve the browser-based serial console",
-	Example: `  kubevirt-console web --listen :8080
-  kubevirt-console web --listen 127.0.0.1:8080 --timeout 5m
-  kubevirt-console web --namespace prod --vmi vm-01 # dedicated console`,
+	Example: `  kubevirt-dashboard web --listen :8080
+  kubevirt-dashboard web --listen 127.0.0.1:8080 --timeout 5m
+  kubevirt-dashboard web --namespace prod --vmi vm-01 # dedicated console`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		virtClient, defaultNamespace, err := newVirtClient()
 		if err != nil {
@@ -254,7 +254,7 @@ func Attach(stdinReader, stdoutReader *io.PipeReader, stdinWriter, stdoutWriter 
 }
 
 func newVirtClient() (kubecli.KubevirtClient, string, error) {
-	fs := pflag.NewFlagSet("kubevirt-console", pflag.ContinueOnError)
+	fs := pflag.NewFlagSet("kubevirt-dashboard", pflag.ContinueOnError)
 	clientConfig := kubecli.DefaultClientConfig(fs)
 	ns, _, err := clientConfig.Namespace()
 	if err != nil {

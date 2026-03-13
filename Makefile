@@ -5,7 +5,7 @@ LDFLAGS := -s -w \
 	-X github.com/jimmicro/version.GitTag=$(GIT_TAG) \
 	-X github.com/jimmicro/version.BuildTime=$(BUILD_TIME)
 
-IMAGE := ghcr.io/jimyag/kubevirt-console
+IMAGE := ghcr.io/jimyag/kubevirt-dashboard
 
 .PHONY: build
 build:

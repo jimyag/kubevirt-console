@@ -14,7 +14,7 @@ KubeVirt Console is a single self-contained Go binary that lets you attach to Vi
 ## Build
 
 ```bash
-go build -o kubevirt-console .
+go build -o kubevirt-dashboard .
 ```
 
 ## CLI usage
@@ -22,7 +22,7 @@ go build -o kubevirt-console .
 Connect your local terminal to a VMI (similar to `virtctl console`):
 
 ```bash
-./kubevirt-console console [-n <namespace>] <vmi-name>
+./kubevirt-dashboard console [-n <namespace>] <vmi-name>
 ```
 
 If you omit `-n/--namespace`, the namespace from the active kubeconfig context is used. Press `Ctrl+]` (escape sequence 29) to exit, or wait for the VMI to disconnect.
@@ -34,7 +34,7 @@ If you omit `-n/--namespace`, the namespace from the active kubeconfig context i
 Serve the embedded UI and access the console through the browser:
 
 ```bash
-./kubevirt-console web --listen 127.0.0.1:8080
+./kubevirt-dashboard web --listen 127.0.0.1:8080
 ```
 
 Visit `http://127.0.0.1:8080/` and fill in the namespace and VMI. The page automatically syncs those fields into the URL (so you can bookmark/share the link) and streams the serial console over WebSocket. If you leave the namespace empty, the server falls back to the namespace from your kubeconfig context. Terminal output includes connection status, and any errors are highlighted next to the Connect button.
@@ -60,7 +60,7 @@ kubectl apply -f manifest/deploy.yaml
 After the pod is running, expose the web UI locally (for example):
 
 ```bash
-kubectl port-forward -n kubevirt-console svc/kubevirt-console 8080:80
+kubectl port-forward -n kubevirt-dashboard svc/kubevirt-dashboard 8080:80
 ```
 
 Then open `http://127.0.0.1:8080/` to reach the embedded xterm UI.

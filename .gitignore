@@ -1,5 +1,5 @@
-kubevirt-console
-kubevirt-console.exe
+kubevirt-dashboard
+kubevirt-dashboard.exe
 kubevirt-dashboard
 vm-statuses.txt
 dashboard/ui/node_modules
