@@ -399,15 +399,15 @@ function DashboardOverview() {
            <div className="space-y-5 mt-4">
               {nsAnalysis.slice(0, 8).map(ns => (
                 <div key={ns.name} className="group flex flex-col gap-2">
-                   <div className="flex justify-between items-end px-1">
-                      <span className="text-[11px] font-black uppercase text-zinc-700 truncate max-w-[140px]">{ns.name}</span>
-                      <div className="flex gap-3 text-[9px] font-bold text-zinc-400">
-                         <span className="flex items-center gap-1"><Cpu size={10}/> {ns.vmCount}</span>
-                         <span className="flex items-center gap-1"><Database size={10}/> {formatStorage(ns.storageGi)}</span>
+                   <div className="flex justify-between items-start px-1 gap-4">
+                      <span className="text-[11px] font-black uppercase text-zinc-700 break-all leading-tight">{ns.name}</span>
+                      <div className="flex gap-3 text-[9px] font-bold text-zinc-400 shrink-0">
+                         <span className="flex items-center gap-1 whitespace-nowrap"><Cpu size={10}/> {ns.vmCount}</span>
+                         <span className="flex items-center gap-1 whitespace-nowrap"><Database size={10}/> {formatStorage(ns.storageGi)}</span>
                       </div>
                    </div>
                    <div className="h-1.5 w-full bg-zinc-100 rounded-full overflow-hidden">
-                      <div className="h-full bg-zinc-950 transition-all duration-1000 ease-out group-hover:bg-blue-600" style={{ width: `${(ns.vmCount / data.vms.length) * 100}%` }} />
+                      <div className="h-full bg-zinc-950 transition-all duration-1000 ease-out group-hover:bg-blue-600" style={{ width: `${(ns.vmCount / (data.vms.length || 1)) * 100}%` }} />
                    </div>
                 </div>
               ))}
@@ -429,7 +429,7 @@ function DashboardOverview() {
                            <Server size={18} />
                         </div>
                         <div>
-                           <div className="text-[11px] font-black text-zinc-900 truncate max-w-[120px]">{node.metadata.name}</div>
+                           <div className="text-[11px] font-black text-zinc-900 break-all leading-tight">{node.metadata.name}</div>
                            <div className="text-[9px] font-bold text-zinc-400 uppercase tracking-tighter mt-0.5">{node.status.capacity.cpu} cores / {node.status.capacity.memory}</div>
                         </div>
                      </div>
@@ -723,9 +723,9 @@ function VMDetail() {
             <Card title="Storage" icon={HardDrive}>
                <div className="space-y-2.5 mt-1">
                  {associatedDVs.map(dv => (
-                   <div key={dv.metadata.uid} className="flex items-center justify-between text-xs p-2 bg-zinc-50/50 rounded-lg border border-zinc-100 font-medium">
-                      <Link to={`/dvs/${dv.metadata.namespace}/${dv.metadata.name}`} className="font-bold truncate max-w-[140px] text-blue-700 hover:underline">{dv.metadata.name}</Link>
-                      <div className="flex items-center gap-3"><span className="text-[10px] font-bold text-zinc-600 font-mono">{dv.spec.storage?.resources?.requests?.storage || "N/A"}</span><StatusBadge status={dv.status?.phase}/></div>
+                   <div key={dv.metadata.uid} className="flex items-center justify-between text-xs p-2 bg-zinc-50/50 rounded-lg border border-zinc-100 font-medium gap-4">
+                      <Link to={`/dvs/${dv.metadata.namespace}/${dv.metadata.name}`} className="font-bold break-all text-blue-700 hover:underline leading-tight flex-1">{dv.metadata.name}</Link>
+                      <div className="flex items-center gap-3 shrink-0"><span className="text-[10px] font-bold text-zinc-600 font-mono">{dv.spec.storage?.resources?.requests?.storage || "N/A"}</span><StatusBadge status={dv.status?.phase}/></div>
                    </div>
                  ))}
                  {associatedDVs.length === 0 && <p className="text-zinc-500 text-[11px] py-2 font-bold uppercase tracking-widest opacity-30 text-center">Empty</p>}
