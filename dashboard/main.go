@@ -15,6 +15,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -46,17 +47,127 @@ var defaultStatuses = []string{
 	"all", "Running", "Stopped", "Starting", "Migrating", "Paused", "ErrorPvcNotFound", "DataVolumeError", "ImagePullBackOff", "CrashLoopBackOff", "Terminating",
 }
 
+// ClusterManager handles multiple kubeconfig contexts
+type ClusterManager struct {
+	mu       sync.RWMutex
+	configs  map[string]*rest.Config
+	clients  map[string]kubecli.KubevirtClient
+	proxies  map[string]*httputil.ReverseProxy
+	dynamics map[string]dynamic.Interface
+	contexts []string
+	defaultCtx string
+}
+
+func NewClusterManager() (*ClusterManager, error) {
+	cm := &ClusterManager{
+		configs:  make(map[string]*rest.Config),
+		clients:  make(map[string]kubecli.KubevirtClient),
+		proxies:  make(map[string]*httputil.ReverseProxy),
+		dynamics: make(map[string]dynamic.Interface),
+	}
+
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	if kubeconfig != "" {
+		loadingRules.ExplicitPath = kubeconfig
+	}
+
+	config, err := loadingRules.Load()
+	if err != nil {
+		// Fallback to in-cluster if possible
+		log.Printf("Failed to load kubeconfig: %v. Checking in-cluster config...", err)
+		restConfig, err := rest.InClusterConfig()
+		if err != nil {
+			return nil, fmt.Errorf("could not find kubeconfig or in-cluster config: %v", err)
+		}
+		cm.contexts = []string{"in-cluster"}
+		cm.defaultCtx = "in-cluster"
+		cm.configs["in-cluster"] = restConfig
+		return cm, nil
+	}
+
+	for name := range config.Contexts {
+		cm.contexts = append(cm.contexts, name)
+	}
+	sort.Strings(cm.contexts)
+	cm.defaultCtx = config.CurrentContext
+	if contextName != "" {
+		cm.defaultCtx = contextName
+	}
+
+	return cm, nil
+}
+
+func (cm *ClusterManager) getClient(r *http.Request) (kubecli.KubevirtClient, dynamic.Interface, *httputil.ReverseProxy, error) {
+	ctxName := r.Header.Get("X-Kube-Context")
+	if ctxName == "" {
+		ctxName = r.URL.Query().Get("context")
+	}
+	if ctxName == "" {
+		ctxName = cm.defaultCtx
+	}
+
+	cm.mu.RLock()
+	client, ok := cm.clients[ctxName]
+	dyn, ok2 := cm.dynamics[ctxName]
+	proxy, ok3 := cm.proxies[ctxName]
+	cm.mu.RUnlock()
+
+	if ok && ok2 && ok3 {
+		return client, dyn, proxy, nil
+	}
+
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	// Re-check after lock
+	if client, ok := cm.clients[ctxName]; ok {
+		return client, cm.dynamics[ctxName], cm.proxies[ctxName], nil
+	}
+
+	log.Printf("Initializing clients for context: %s", ctxName)
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	if kubeconfig != "" {
+		loadingRules.ExplicitPath = kubeconfig
+	}
+	configOverrides := &clientcmd.ConfigOverrides{CurrentContext: ctxName}
+	clientConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
+	
+	restConfig, err := clientConfig.ClientConfig()
+	if err != nil {
+		// If explicit context fail, fallback to in-cluster or default
+		if ctxName == "in-cluster" {
+			restConfig, err = rest.InClusterConfig()
+		}
+		if err != nil { return nil, nil, nil, err }
+	}
+
+	virtClient, err := kubecli.GetKubevirtClientFromRESTConfig(restConfig)
+	if err != nil { return nil, nil, nil, err }
+
+	dynClient, err := dynamic.NewForConfig(restConfig)
+	if err != nil { return nil, nil, nil, err }
+
+	target, _ := url.Parse(restConfig.Host)
+	transport, _ := rest.TransportFor(restConfig)
+	proxy = httputil.NewSingleHostReverseProxy(target)
+	proxy.Transport = transport
+
+	cm.configs[ctxName] = restConfig
+	cm.clients[ctxName] = virtClient
+	cm.dynamics[ctxName] = dynClient
+	cm.proxies[ctxName] = proxy
+
+	return virtClient, dynClient, proxy, nil
+}
+
 var rootCmd = &cobra.Command{
 	Use:   "kubevirt-dashboard",
-	Short: "KubeVirt Dashboard - Stable & Reliable",
+	Short: "KubeVirt Dashboard - Multi-Cluster Management",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		restConfig, defaultNamespace, err := getKubeConfig()
+		cm, err := NewClusterManager()
 		if err != nil { return err }
-		virtClient, err := kubecli.GetKubevirtClientFromRESTConfig(restConfig)
-		if err != nil { return err }
-		if namespace == "" { namespace = defaultNamespace }
 		ensureStatusFile()
-		return runServer(restConfig, virtClient, listenAddr)
+		return runServer(cm, listenAddr)
 	},
 }
 
@@ -92,42 +203,39 @@ func loadStatuses() []string {
 	return statuses
 }
 
-func getKubeConfig() (*rest.Config, string, error) {
-	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
-	if kubeconfig != "" { loadingRules.ExplicitPath = kubeconfig }
-	configOverrides := &clientcmd.ConfigOverrides{}
-	if contextName != "" { configOverrides.CurrentContext = contextName }
-	clientConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
-	ns, _, _ := clientConfig.Namespace()
-	if ns == "" { ns = "default" }
-	restConfig, err := clientConfig.ClientConfig()
-	return restConfig, ns, err
-}
-
-func runServer(config *rest.Config, virtClient kubecli.KubevirtClient, addr string) error {
+func runServer(cm *ClusterManager, addr string) error {
 	distFS, _ := fs.Sub(uiContent, "ui/dist")
-	target, _ := url.Parse(config.Host)
-	transport, _ := rest.TransportFor(config)
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	proxy.Transport = transport
-
-	dynClient, err := dynamic.NewForConfig(config)
-	if err != nil { return err }
-
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/api/v1/vms", func(w http.ResponseWriter, r *http.Request) { handleListVMs(virtClient, w, r) })
+	mux.HandleFunc("/api/v1/contexts", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"contexts": cm.contexts,
+			"default":  cm.defaultCtx,
+		})
+	})
+
+	mux.HandleFunc("/api/v1/vms", func(w http.ResponseWriter, r *http.Request) {
+		virtClient, _, _, err := cm.getClient(r)
+		if err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
+		handleListVMs(virtClient, w, r)
+	})
+
 	mux.HandleFunc("/api/v1/vm-statuses", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(loadStatuses())
 	})
 
-	// Serial Console WebSocket
 	mux.HandleFunc("/api/v1/ws", func(w http.ResponseWriter, r *http.Request) {
+		virtClient, _, _, err := cm.getClient(r)
+		if err != nil { log.Printf("ws client fail: %v", err); return }
 		handleWebsocket(virtClient, w, r)
 	})
 
 	mux.HandleFunc("/api/v1/yaml/", func(w http.ResponseWriter, r *http.Request) {
+		_, dynClient, _, err := cm.getClient(r)
+		if err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
+
 		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/yaml/"), "/")
 		if len(parts) < 3 {
 			http.Error(w, "invalid path", http.StatusBadRequest)
@@ -164,6 +272,8 @@ func runServer(config *rest.Config, virtClient kubecli.KubevirtClient, addr stri
 	})
 
 	mux.HandleFunc("/api/v1/namespaces-list", func(w http.ResponseWriter, r *http.Request) {
+		virtClient, _, _, err := cm.getClient(r)
+		if err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
 		vms, _ := virtClient.VirtualMachine(metav1.NamespaceAll).List(context.Background(), metav1.ListOptions{})
 		nsMap := make(map[string]bool)
 		for _, vm := range vms.Items { nsMap[vm.Namespace] = true }
@@ -173,7 +283,17 @@ func runServer(config *rest.Config, virtClient kubecli.KubevirtClient, addr stri
 		json.NewEncoder(w).Encode(nss)
 	})
 
-	mux.HandleFunc("/apis/", func(w http.ResponseWriter, r *http.Request) { proxy.ServeHTTP(w, r) })
+	mux.HandleFunc("/apis/", func(w http.ResponseWriter, r *http.Request) {
+		_, _, proxy, err := cm.getClient(r)
+		if err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
+		proxy.ServeHTTP(w, r)
+	})
+
+	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+		_, _, proxy, err := cm.getClient(r)
+		if err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
+		proxy.ServeHTTP(w, r)
+	})
 
 	fileServer := http.FileServer(http.FS(distFS))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -184,7 +304,7 @@ func runServer(config *rest.Config, virtClient kubecli.KubevirtClient, addr stri
 		fileServer.ServeHTTP(w, r)
 	})
 
-	log.Printf("Starting Dashboard at http://%s", addr)
+	log.Printf("Starting Dashboard at http://%s (Contexts: %v)", addr, cm.contexts)
 	return http.ListenAndServe(addr, mux)
 }
 

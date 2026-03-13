@@ -22,7 +22,11 @@ import {
   Maximize2,
   Minimize2,
   RefreshCw,
-  AlertCircle
+  AlertCircle,
+  Globe,
+  Server,
+  Database,
+  Hash
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Terminal as XTerm } from "xterm";
@@ -74,15 +78,55 @@ interface DV {
   spec: { storage?: { resources?: { requests?: { storage?: string } } }; pvc?: { resources?: { requests?: { storage?: string } } }; source?: Record<string, any>; };
 }
 
+interface K8sNode {
+  metadata: ResourceMetadata;
+  status: { capacity: Record<string, string>; allocatable: Record<string, string>; conditions: Array<{ type: string; status: string }>; };
+  spec: { unschedulable?: boolean };
+}
+
+interface K8sPod {
+  metadata: ResourceMetadata;
+  status: { phase: string; containerStatuses?: Array<{ ready: boolean; restartCount: number }>; };
+}
+
+// --- Utils ---
+
+const parseStorage = (s?: string): number => {
+  if (!s) return 0;
+  const num = parseFloat(s);
+  if (s.endsWith("Ti")) return num * 1024;
+  if (s.endsWith("Gi")) return num;
+  if (s.endsWith("Mi")) return num / 1024;
+  if (s.endsWith("Ki")) return num / (1024 * 1024);
+  return num / (1024 * 1024 * 1024); // Default bytes to Gi
+};
+
+const formatStorage = (gi: number): string => {
+  if (gi >= 1024) return `${(gi / 1024).toFixed(1)}Ti`;
+  return `${gi.toFixed(1)}Gi`;
+};
+
+// --- Context / API Wrapper ---
+
+const getContext = () => localStorage.getItem("kube-context") || "";
+const setContext = (ctx: string) => localStorage.setItem("kube-context", ctx);
+
+const apiFetch = (url: string, options: RequestInit = {}) => {
+  const ctx = getContext();
+  const headers = new Headers(options.headers || {});
+  if (ctx) headers.set("X-Kube-Context", ctx);
+  return fetch(url, { ...options, headers });
+};
+
 // --- Components ---
 
 function StatusBadge({ status }: { status?: string }) {
   if (!status) return <Badge variant="outline">Unknown</Badge>;
   const lower = status.toLowerCase();
   let variant = "outline";
-  if (lower.includes("running") || lower.includes("succeeded") || lower.includes("ready")) variant = "success";
-  else if (lower.includes("error") || lower.includes("fail") || lower.includes("crash")) variant = "danger";
-  else if (lower.includes("start") || lower.includes("progress") || lower.includes("migrat") || lower.includes("import")) variant = "warning";
+  if (lower.includes("running") || lower.includes("succeeded") || lower.includes("ready") || lower.includes("true")) variant = "success";
+  else if (lower.includes("error") || lower.includes("fail") || lower.includes("crash") || lower.includes("false")) variant = "danger";
+  else if (lower.includes("start") || lower.includes("progress") || lower.includes("migrat") || lower.includes("import") || lower.includes("pending")) variant = "warning";
   return <Badge variant={variant}>{status}</Badge>;
 }
 
@@ -92,23 +136,23 @@ function Badge({ children, variant = "default", className }: { children: React.R
     success: "bg-green-100 text-green-700 border-green-200",
     warning: "bg-yellow-100 text-yellow-700 border-yellow-200",
     danger: "bg-red-100 text-red-700 border-red-200",
-    outline: "border border-zinc-300 bg-white text-zinc-700"
+    outline: "border border-zinc-200 bg-white text-zinc-600"
   };
-  return <span className={cn("inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-bold border transition-colors tracking-tight", variants[variant], className)}>{children}</span>;
+  return <span className={cn("inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-bold border transition-colors tracking-tight", variants[variant], className)}>{children}</span>;
 }
 
 function Card({ children, title, description, footer, icon: Icon, className }: { children?: React.ReactNode, title?: string, description?: string, footer?: string, icon?: any, className?: string }) {
   return (
-    <div className={cn("rounded-xl border bg-white shadow-sm overflow-hidden", className)}>
-      <div className="p-5">
-        <div className="flex items-center justify-between pb-2">
-          <h3 className="text-[11px] font-bold uppercase tracking-widest text-zinc-500">{title}</h3>
-          {Icon && <Icon className="h-4 w-4 text-zinc-400" />}
+    <div className={cn("rounded-2xl border bg-white shadow-sm overflow-hidden flex flex-col", className)}>
+      <div className="p-6 flex-1">
+        <div className="flex items-center justify-between pb-3">
+          <h3 className="text-[10px] font-black uppercase tracking-[0.1em] text-zinc-400">{title}</h3>
+          {Icon && <Icon className="h-4 w-4 text-zinc-300" />}
         </div>
-        {description && <p className="text-2xl font-bold tracking-tight text-zinc-900">{description}</p>}
-        {children && <div className="mt-1">{children}</div>}
+        {description && <p className="text-3xl font-black tracking-tighter text-zinc-900 leading-none">{description}</p>}
+        {children && <div className="mt-2">{children}</div>}
       </div>
-      {footer && <div className="bg-zinc-50 px-5 py-2.5 text-[10px] font-bold uppercase tracking-widest text-zinc-500 border-t border-zinc-100">{footer}</div>}
+      {footer && <div className="bg-zinc-50/50 px-6 py-3 text-[10px] font-bold uppercase tracking-widest text-zinc-400 border-t border-zinc-100/50">{footer}</div>}
     </div>
   );
 }
@@ -121,11 +165,11 @@ function CopyableText({ text, label }: { text: string, label?: string }) {
     setTimeout(() => setCopied(false), 2000);
   };
   return (
-    <div className="group relative flex flex-col gap-1 w-full bg-zinc-50/50 p-2 rounded-lg border border-zinc-100 hover:border-zinc-300 transition-colors">
-      {label && <div className="text-[9px] font-bold text-zinc-600 uppercase tracking-widest">{label}</div>}
+    <div className="group relative flex flex-col gap-1 w-full bg-zinc-50/50 p-2.5 rounded-xl border border-zinc-100 hover:border-zinc-200 transition-all">
+      {label && <div className="text-[9px] font-bold text-zinc-400 uppercase tracking-widest">{label}</div>}
       <div className="flex items-start justify-between gap-4">
-        <div className="text-[11px] font-mono font-bold text-zinc-900 break-all leading-relaxed flex-1">{text}</div>
-        <button onClick={onCopy} className="p-1 hover:bg-white rounded border border-transparent hover:border-zinc-200 transition-all text-zinc-500 hover:text-zinc-900 shrink-0 mt-0.5 shadow-sm">{copied ? <Check size={12} className="text-green-600" /> : <Copy size={12} />}</button>
+        <div className="text-[11px] font-mono font-bold text-zinc-800 break-all leading-relaxed flex-1">{text}</div>
+        <button onClick={onCopy} className="p-1 hover:bg-white rounded-lg border border-transparent hover:border-zinc-200 transition-all text-zinc-400 hover:text-zinc-900 shrink-0 mt-0.5 shadow-sm">{copied ? <Check size={12} className="text-green-600" /> : <Copy size={12} />}</button>
       </div>
     </div>
   );
@@ -145,7 +189,6 @@ function SerialConsole({ namespace, name, active }: { namespace: string, name: s
     if (wsRef.current?.readyState === WebSocket.OPEN && xtermRef.current && fitAddonRef.current) {
       fitAddonRef.current.fit();
       const term = xtermRef.current;
-      // RESTORED: User requested manual sync. \x15 ensures line is cleared before command.
       wsRef.current.send(`\x15export TERM=xterm-256color LANG=C.UTF-8; stty cols ${term.cols} rows ${term.rows}\r`);
       term.focus();
     }
@@ -186,7 +229,8 @@ function SerialConsole({ namespace, name, active }: { namespace: string, name: s
     fitAddonRef.current = fitAddon;
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${protocol}//${window.location.host}/api/v1/ws?namespace=${namespace}&vmi=${name}`;
+    const ctx = getContext();
+    const wsUrl = `${protocol}//${window.location.host}/api/v1/ws?namespace=${namespace}&vmi=${name}&context=${ctx}`;
     const ws = new WebSocket(wsUrl);
     ws.binaryType = 'arraybuffer';
     wsRef.current = ws;
@@ -244,7 +288,7 @@ function SerialConsole({ namespace, name, active }: { namespace: string, name: s
                {connStatus === "connected" && (
                  <div className="flex items-center gap-1.5 text-blue-400 animate-in slide-in-from-top-1">
                     <AlertCircle size={10} />
-                    <span className="text-[9px] font-bold uppercase tracking-tight">登录后请点击 Sync Size 同步大小</span>
+                    <span className="text-[9px] font-bold uppercase tracking-tight text-blue-300">进入 Shell 后点击 Sync Size 同步</span>
                  </div>
                )}
             </div>
@@ -266,6 +310,182 @@ function SerialConsole({ namespace, name, active }: { namespace: string, name: s
 
 // --- Views ---
 
+function DashboardOverview() {
+  const [data, setData] = useState<{ 
+    vms: VM[], vmis: VMI[], dvs: DV[], nodes: K8sNode[], kvPods: K8sPod[], loading: boolean 
+  }>({ vms: [], vmis: [], dvs: [], nodes: [], kvPods: [], loading: true });
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const [vmsR, vmisR, dvsR, nodesR, podsR] = await Promise.all([ 
+          apiFetch("/api/v1/vms").then(r => r.json()), 
+          apiFetch("/apis/kubevirt.io/v1/virtualmachineinstances").then(r => r.json()), 
+          apiFetch("/apis/cdi.kubevirt.io/v1beta1/datavolumes").then(r => r.json()),
+          apiFetch("/api/v1/nodes").then(r => r.json()),
+          apiFetch("/api/v1/namespaces/kubevirt/pods").then(r => r.json())
+        ]);
+        setData({ 
+          vms: vmsR.items || [], 
+          vmis: vmisR.items || [], 
+          dvs: dvsR.items || [], 
+          nodes: nodesR.items || [], 
+          kvPods: podsR.items || [],
+          loading: false 
+        });
+      } catch (e) { setData(prev => ({ ...prev, loading: false })); }
+    }; load();
+  }, []);
+
+  const nodeStats = useMemo(() => {
+    const total = data.nodes.length;
+    const unschedulable = data.nodes.filter(n => n.spec.unschedulable).length;
+    const ready = data.nodes.filter(n => n.status.conditions.some(c => c.type === "Ready" && c.status === "True")).length;
+    return { total, unschedulable, ready };
+  }, [data.nodes]);
+
+  const nsAnalysis = useMemo(() => {
+    const analysis: Record<string, { vmCount: number, storageGi: number }> = {};
+    data.vms.forEach(vm => {
+      const ns = vm.metadata.namespace;
+      if (!analysis[ns]) analysis[ns] = { vmCount: 0, storageGi: 0 };
+      analysis[ns].vmCount++;
+    });
+    data.dvs.forEach(dv => {
+      const ns = dv.metadata.namespace;
+      if (!analysis[ns]) analysis[ns] = { vmCount: 0, storageGi: 0 };
+      const requested = dv.spec.storage?.resources?.requests?.storage || dv.spec.pvc?.resources?.requests?.storage;
+      analysis[ns].storageGi += parseStorage(requested);
+    });
+    return Object.entries(analysis).sort((a, b) => b[1].vmCount - a[1].vmCount).map(([name, stats]) => ({ name, ...stats }));
+  }, [data.vms, data.dvs]);
+
+  const infraHealth = useMemo(() => {
+    const components = ["virt-api", "virt-controller", "virt-handler"];
+    return components.map(c => {
+      const pods = data.kvPods.filter(p => p.metadata.name.startsWith(c));
+      const healthy = pods.length > 0 && pods.every(p => p.status.phase === "Running");
+      return { name: c, healthy, count: pods.length };
+    });
+  }, [data.kvPods]);
+
+  if (data.loading) return <div className="p-24 text-center font-bold text-zinc-400 tracking-widest uppercase animate-pulse">Initializing Command Center...</div>;
+
+  const totalStorageGi = nsAnalysis.reduce((acc, curr) => acc + curr.storageGi, 0);
+
+  return (
+    <div className="space-y-10 animate-in fade-in duration-700">
+      <div>
+        <h2 className="text-3xl font-black tracking-tighter uppercase text-zinc-900 leading-none">Cluster Dashboard</h2>
+        <p className="text-zinc-500 text-xs font-bold uppercase tracking-widest mt-2">Fabric Infrastructure Overview</p>
+      </div>
+
+      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
+        <Card title="Compute Nodes" description={nodeStats.total.toString()} icon={Server} footer={`${nodeStats.ready} Ready / ${nodeStats.unschedulable} Cordoned`} />
+        <Card title="Virtual Units" description={data.vms.length.toString()} icon={Cpu} footer={`${data.vmis.length} Streams Active`} />
+        <Card title="Disk Allocation" description={formatStorage(totalStorageGi)} icon={Database} footer={`${data.dvs.length} Active Blocks`} />
+        <Card title="Infrastructure" description={infraHealth.every(i => i.healthy) ? "Stable" : "Degraded"} icon={ShieldCheck} className={infraHealth.every(i => i.healthy) ? "" : "border-red-200"}>
+           <div className="flex gap-2 mt-2">
+              {infraHealth.map(i => (
+                <div key={i.name} title={i.name} className={cn("w-2.5 h-2.5 rounded-full border border-white/20", i.healthy ? "bg-green-500" : "bg-red-500 animate-pulse")} />
+              ))}
+           </div>
+        </Card>
+      </div>
+
+      <div className="grid gap-8 lg:grid-cols-3">
+        {/* Namespace Analytics */}
+        <Card title="Namespace Analysis" className="lg:col-span-1">
+           <div className="space-y-5 mt-4">
+              {nsAnalysis.slice(0, 8).map(ns => (
+                <div key={ns.name} className="group flex flex-col gap-2">
+                   <div className="flex justify-between items-end px-1">
+                      <span className="text-[11px] font-black uppercase text-zinc-700 truncate max-w-[140px]">{ns.name}</span>
+                      <div className="flex gap-3 text-[9px] font-bold text-zinc-400">
+                         <span className="flex items-center gap-1"><Cpu size={10}/> {ns.vmCount}</span>
+                         <span className="flex items-center gap-1"><Database size={10}/> {formatStorage(ns.storageGi)}</span>
+                      </div>
+                   </div>
+                   <div className="h-1.5 w-full bg-zinc-100 rounded-full overflow-hidden">
+                      <div className="h-full bg-zinc-950 transition-all duration-1000 ease-out group-hover:bg-blue-600" style={{ width: `${(ns.vmCount / data.vms.length) * 100}%` }} />
+                   </div>
+                </div>
+              ))}
+              {nsAnalysis.length === 0 && <p className="text-zinc-300 text-[10px] font-black uppercase tracking-widest text-center py-8">Empty Mesh</p>}
+           </div>
+        </Card>
+
+        {/* Node Performance */}
+        <Card title="Node Distribution" className="lg:col-span-2">
+           <div className="grid sm:grid-cols-2 gap-4 mt-2">
+              {data.nodes.slice(0, 10).map(node => {
+                const nodeVmis = data.vmis.filter(v => v.status.nodeName === node.metadata.name);
+                const isReady = node.status.conditions.some(c => c.type === "Ready" && c.status === "True");
+                
+                return (
+                  <div key={node.metadata.uid} className="flex items-start justify-between p-4 rounded-2xl border border-zinc-100 hover:border-zinc-200 transition-all bg-zinc-50/20">
+                     <div className="flex items-center gap-4">
+                        <div className={cn("p-2.5 rounded-xl border", isReady ? "bg-white text-zinc-600 border-zinc-100" : "bg-red-50 text-red-600 border-red-100")}>
+                           <Server size={18} />
+                        </div>
+                        <div>
+                           <div className="text-[11px] font-black text-zinc-900 truncate max-w-[120px]">{node.metadata.name}</div>
+                           <div className="text-[9px] font-bold text-zinc-400 uppercase tracking-tighter mt-0.5">{node.status.capacity.cpu} cores / {node.status.capacity.memory}</div>
+                        </div>
+                     </div>
+                     <div className="flex flex-col items-end gap-1">
+                        <Badge variant="outline" className="px-1.5 py-0 border-zinc-300">
+                           <Hash size={8} className="mr-1" /> {nodeVmis.length} VMs
+                        </Badge>
+                        <div className="text-[9px] font-black text-zinc-400 uppercase">{isReady ? "Ready" : "Offline"}</div>
+                     </div>
+                  </div>
+                );
+              })}
+              {data.nodes.length === 0 && <div className="col-span-2 py-12 text-center text-zinc-300 font-black uppercase tracking-widest italic">No Cluster Nodes</div>}
+           </div>
+        </Card>
+      </div>
+
+      {/* Control Plane Integrity */}
+      <div className="grid gap-8 lg:grid-cols-3">
+         <Card title="Infrastructure Integrity" className="lg:col-span-1">
+            <div className="space-y-3 mt-2">
+               {infraHealth.map(i => (
+                 <div key={i.name} className="flex items-center justify-between p-3.5 rounded-2xl border border-zinc-100 bg-zinc-50/30">
+                    <div className="flex items-center gap-3">
+                       <div className={cn("p-2 rounded-xl", i.healthy ? "bg-green-100 text-green-600" : "bg-red-100 text-red-600")}>
+                          <ShieldCheck size={16}/>
+                       </div>
+                       <span className="text-[11px] font-black uppercase text-zinc-700 tracking-tight">{i.name.replace('virt-', '')}</span>
+                    </div>
+                    <Badge variant={i.healthy ? "success" : "danger"} className="rounded-full px-3">{i.count} Instance</Badge>
+                 </div>
+               ))}
+            </div>
+         </Card>
+
+         <Card title="Recent Provisioning" className="lg:col-span-2">
+            <div className="space-y-2 mt-2">
+               {[...data.vms].sort((a,b) => new Date(b.metadata.creationTimestamp).getTime() - new Date(a.metadata.creationTimestamp).getTime()).slice(0, 5).map(vm => (
+                 <div key={vm.metadata.uid} className="flex items-center justify-between p-3.5 hover:bg-zinc-50 rounded-2xl transition-all border border-transparent hover:border-zinc-100">
+                    <div className="flex items-center gap-4">
+                       <div className="w-10 h-10 bg-zinc-100 text-zinc-500 rounded-xl flex items-center justify-center font-black text-sm uppercase shadow-inner border border-zinc-200/50">{vm.metadata.name[0]}</div>
+                       <div>
+                          <Link to={`/vms/${vm.metadata.namespace}/${vm.metadata.name}`} className="text-xs font-black text-zinc-900 hover:text-blue-700 transition-colors tracking-tight">{vm.metadata.name}</Link>
+                          <div className="text-[9px] text-zinc-400 font-bold uppercase tracking-tight">{new Date(vm.metadata.creationTimestamp).toLocaleDateString()} · {vm.metadata.namespace}</div>
+                       </div>
+                    </div>
+                    <StatusBadge status={vm.status?.printableStatus} />
+                 </div>
+               ))}
+            </div>
+         </Card>
+      </div>
+    </div>
+  );
+}
+
 function DVDetail() {
   const { namespace, name } = useParams();
   const navigate = useNavigate();
@@ -278,8 +498,8 @@ function DVDetail() {
     const fetchData = async () => {
       try {
         const [res, yamlRes] = await Promise.all([
-          fetch(`/apis/cdi.kubevirt.io/v1beta1/namespaces/${namespace}/datavolumes/${name}`),
-          fetch(`/api/v1/yaml/datavolumes/${namespace}/${name}`)
+          apiFetch(`/apis/cdi.kubevirt.io/v1beta1/namespaces/${namespace}/datavolumes/${name}`),
+          apiFetch(`/api/v1/yaml/datavolumes/${namespace}/${name}`)
         ]);
         if (res.ok) setDv(await res.json());
         if (yamlRes.ok) setDvYaml(await yamlRes.text());
@@ -352,7 +572,7 @@ function DVDetail() {
                </div>
             </Card>
             <Card title="Conditions" icon={ShieldCheck} className="lg:col-span-3">
-               <div className="space-y-3 mt-1">
+               <div className="space-y-3 mt-1 text-zinc-800 font-medium">
                   {dv.status?.conditions?.map((c: any) => (
                     <div key={c.type} className="flex items-start gap-4 p-3 rounded-xl border border-zinc-100 bg-zinc-50/50">
                        <Badge variant={c.status === "True" ? "success" : "danger"}>{c.type}</Badge>
@@ -390,9 +610,9 @@ function VMDetail() {
   const fetchData = async () => {
     try {
       const [vmRes, vmiRes, yamlRes] = await Promise.all([
-        fetch(`/apis/kubevirt.io/v1/namespaces/${namespace}/virtualmachines/${name}`),
-        fetch(`/apis/kubevirt.io/v1/namespaces/${namespace}/virtualmachineinstances/${name}`),
-        fetch(`/api/v1/yaml/virtualmachines/${namespace}/${name}`)
+        apiFetch(`/apis/kubevirt.io/v1/namespaces/${namespace}/virtualmachines/${name}`),
+        apiFetch(`/apis/kubevirt.io/v1/namespaces/${namespace}/virtualmachineinstances/${name}`),
+        apiFetch(`/api/v1/yaml/virtualmachines/${namespace}/${name}`)
       ]);
       const vmData = vmRes.ok ? await vmRes.json() : null;
       setVm(vmData);
@@ -401,7 +621,7 @@ function VMDetail() {
       if (vmData?.spec.template?.spec?.volumes) {
         const dvNames = vmData.spec.template.spec.volumes.filter((v: any) => v.dataVolume).map((v: any) => v.dataVolume.name);
         if (dvNames.length > 0) {
-          const dvs = await Promise.all(dvNames.map((dvName: string) => fetch(`/apis/cdi.kubevirt.io/v1beta1/namespaces/${namespace}/datavolumes/${dvName}`).then(r => r.ok ? r.json() : null)));
+          const dvs = await Promise.all(dvNames.map((dvName: string) => apiFetch(`/apis/cdi.kubevirt.io/v1beta1/namespaces/${namespace}/datavolumes/${dvName}`).then(r => r.ok ? r.json() : null)));
           setAssociatedDVs(dvs.filter(d => d !== null));
         }
       }
@@ -411,7 +631,7 @@ function VMDetail() {
   useEffect(() => { fetchData(); }, [namespace, name]);
 
   const handleAction = async (action: string) => {
-    await fetch(`/apis/subresources.kubevirt.io/v1/namespaces/${namespace}/virtualmachines/${name}/${action}`, { method: 'PUT', body: '{}' });
+    await apiFetch(`/apis/subresources.kubevirt.io/v1/namespaces/${namespace}/virtualmachines/${name}/${action}`, { method: 'PUT', body: '{}' });
     fetchData();
   };
 
@@ -549,7 +769,7 @@ function DVList() {
   const [dvs, setDvs] = useState<DV[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
-  useEffect(() => { fetch("/apis/cdi.kubevirt.io/v1beta1/datavolumes").then(r => r.json()).then(data => { setDvs(data.items || []); setLoading(false); }); }, []);
+  useEffect(() => { apiFetch("/apis/cdi.kubevirt.io/v1beta1/datavolumes").then(r => r.json()).then(data => { setDvs(data.items || []); setLoading(false); }); }, []);
   const filtered = dvs.filter(dv => dv.metadata.name.toLowerCase().includes(searchTerm.toLowerCase()));
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
@@ -572,12 +792,12 @@ function VMList() {
     setLoading(true);
     try {
       const params = new URLSearchParams({ name: searchTerm, status: statusFilter, namespace: nsFilter });
-      const res = await fetch(`/api/v1/vms?${params}`);
+      const res = await apiFetch(`/api/v1/vms?${params}`);
       const data = await res.json();
       setVms(data.items || []);
     } finally { setLoading(false); }
   };
-  useEffect(() => { fetch("/api/v1/namespaces-list").then(r => r.json()).then(setNamespaces); fetch("/api/v1/vm-statuses").then(r => r.json()).then(setAvailableStatuses); }, []);
+  useEffect(() => { apiFetch("/api/v1/namespaces-list").then(r => r.json()).then(setNamespaces); apiFetch("/api/v1/vm-statuses").then(r => r.json()).then(setAvailableStatuses); }, []);
   useEffect(() => { const timer = setTimeout(() => fetchVms(), 300); return () => clearTimeout(timer); }, [searchTerm, nsFilter, statusFilter]);
   return (
     <div className="space-y-8 animate-in fade-in duration-500 font-medium">
@@ -588,41 +808,72 @@ function VMList() {
   );
 }
 
-function DashboardOverview() {
-  const [data, setData] = useState<{ vms: VM[], vmis: VMI[], dvs: DV[], loading: boolean }>({ vms: [], vmis: [], dvs: [], loading: true });
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const [vmsR, vmisR, dvsR] = await Promise.all([ fetch("/api/v1/vms").then(r => r.json()), fetch("/apis/kubevirt.io/v1/virtualmachineinstances").then(r => r.json()), fetch("/apis/cdi.kubevirt.io/v1beta1/datavolumes").then(r => r.json()) ]);
-        setData({ vms: vmsR.items || [], vmis: vmisR.items || [], dvs: dvsR.items || [], loading: false });
-      } catch (e) { setData(prev => ({ ...prev, loading: false })); }
-    }; load();
-  }, []);
-  const totalVms = data.vms.length;
-  const runningVmis = data.vmis.filter(v => v.status.phase === "Running").length;
-  const nsList = useMemo(() => {
-    const counts: Record<string, number> = {};
-    data.vms.forEach(v => { counts[v.metadata.namespace] = (counts[v.metadata.namespace] || 0) + 1; });
-    return Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([name, count]) => ({ name, count }));
-  }, [data.vms]);
-  if (data.loading) return <div className="p-24 text-center font-bold text-zinc-500 tracking-widest uppercase animate-pulse">Initializing Dashboard...</div>;
-  return (
-    <div className="space-y-10 animate-in fade-in duration-700 font-medium text-zinc-900">
-      <div><h2 className="text-3xl font-black tracking-tight uppercase text-zinc-900 leading-none">Infrastructure</h2><p className="text-zinc-600 text-xs font-bold uppercase tracking-widest mt-2">Global compute cluster</p></div>
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4"><Card title="Machines" description={totalVms.toString()} icon={Cpu} footer="Total Capacity" /><Card title="Running" description={runningVmis.toString()} icon={Activity} footer="Active Streams" /><Card title="Storage" description={data.dvs.length.toString()} icon={HardDrive} footer="Volumes Count" /><Card title="Domains" description={nsList.length.toString()} icon={Box} footer="Namespaces" /></div>
-      <div className="grid gap-8 lg:grid-cols-3"><Card title="Zone Load" className="lg:col-span-1"><div className="space-y-5 mt-4 text-zinc-900 font-medium">{nsList.slice(0, 6).map(ns => { const percent = (ns.count / totalVms) * 100; return ( <div key={ns.name} className="space-y-2"><div className="flex justify-between text-[10px] font-bold uppercase tracking-widest"><span>{ns.name}</span><span className="text-zinc-600">{ns.count}</span></div><div className="h-1.5 w-full bg-zinc-100 rounded-full overflow-hidden"><div className="h-full bg-zinc-950 transition-all duration-1000" style={{ width: `${percent}%` }} /></div></div> ); })}</div></Card><Card title="Recent Activity" className="lg:col-span-2"><div className="space-y-2 mt-4 text-zinc-900 font-medium">{[...data.vms].sort((a,b) => new Date(b.metadata.creationTimestamp).getTime() - new Date(a.metadata.creationTimestamp).getTime()).slice(0, 8).map(vm => ( <div key={vm.metadata.uid} className="flex items-center gap-5 p-3 hover:bg-zinc-50 rounded-xl transition-all border border-transparent hover:border-zinc-200"><div className="w-10 h-10 bg-zinc-100 text-zinc-600 border rounded-xl flex items-center justify-center font-bold text-sm uppercase shadow-sm">{vm.metadata.name[0]}</div><div className="flex-1 min-w-0"><Link to={`/vms/${vm.metadata.namespace}/${vm.metadata.name}`} className="font-bold truncate block text-zinc-950 hover:text-blue-700 transition-colors">{vm.metadata.name}</Link><div className="text-[10px] text-zinc-600 font-bold tracking-tight">{new Date(vm.metadata.creationTimestamp).toLocaleDateString()}</div></div><Badge variant="outline" className="border-zinc-300 font-bold text-zinc-600 tracking-tighter">{vm.metadata.namespace}</Badge></div> ))}</div></Card></div>
-    </div>
-  );
-}
-
 // --- Layout ---
 
 function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
+  const [contexts, setContexts] = useState<string[]>([]);
+  const [currentCtx, setCurrentCtx] = useState(getContext());
+
+  useEffect(() => {
+    fetch("/api/v1/contexts").then(r => r.json()).then(data => {
+      setContexts(data.contexts || []);
+      if (!getContext() && data.default) {
+        setContext(data.default);
+        setCurrentCtx(data.default);
+      }
+    });
+  }, []);
+
+  const handleCtxChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const val = e.target.value;
+    setContext(val);
+    setCurrentCtx(val);
+    window.location.reload(); // Refresh to re-initialize all clients
+  };
+
   const menuItems = [ { name: "Overview", path: "/", icon: LayoutDashboard }, { name: "Machines", path: "/vms", icon: Cpu }, { name: "Storage", path: "/dvs", icon: HardDrive } ];
   return (
     <div className="flex min-h-screen bg-zinc-50/20">
-      <aside className="w-72 border-r bg-white flex flex-col fixed inset-y-0 z-50 shadow-sm"><div className="h-16 border-b flex items-center px-10 gap-4"><div className="bg-zinc-900 p-1.5 rounded-lg shadow-xl shadow-zinc-200"><Terminal className="text-white h-4 w-4" /></div><span className="font-black text-lg tracking-tighter uppercase text-zinc-900 leading-none">Virt<br/><span className="text-zinc-400">Dashboard</span></span></div><nav className="flex-1 p-6 space-y-1.5 overflow-y-auto">{menuItems.map((item) => { const Icon = item.icon; const isActive = location.pathname === item.path || (item.path !== "/" && location.pathname.startsWith(item.path)); return ( <Link key={item.path} to={item.path} className={cn("flex items-center gap-4 px-5 py-3.5 rounded-2xl transition-all text-[11px] font-bold uppercase tracking-wider", isActive ? "bg-zinc-900 text-white shadow-xl translate-x-1" : "text-zinc-500 hover:bg-zinc-50 hover:text-zinc-900")}><Icon size={18} /> {item.name}</Link> ); })}</nav><div className="p-8 border-t"><div className="text-[10px] font-black text-zinc-400 uppercase tracking-widest tracking-[0.3em]">Stable v1.1.0</div></div></aside>
+      <aside className="w-72 border-r bg-white flex flex-col fixed inset-y-0 z-50 shadow-sm">
+        <div className="h-16 border-b flex items-center px-8 gap-4">
+          <div className="bg-zinc-900 p-1.5 rounded-lg shadow-xl shadow-zinc-200"><Terminal className="text-white h-4 w-4" /></div>
+          <span className="font-black text-lg tracking-tighter uppercase text-zinc-900 leading-none">Virt<br/><span className="text-zinc-400">Dashboard</span></span>
+        </div>
+        
+        <div className="p-6 pb-2">
+           <div className="bg-zinc-50 border border-zinc-200 rounded-xl p-3">
+              <label className="text-[9px] font-black text-zinc-400 uppercase tracking-widest block mb-2 px-1">Selected Cluster</label>
+              <div className="relative">
+                 <select 
+                   value={currentCtx} 
+                   onChange={handleCtxChange}
+                   className="w-full bg-white border border-zinc-200 rounded-lg px-3 py-2 text-[11px] font-bold text-zinc-800 outline-none appearance-none focus:ring-2 focus:ring-zinc-900/5 transition-all cursor-pointer shadow-sm pr-8"
+                 >
+                   {contexts.map(c => <option key={c} value={c}>{c}</option>)}
+                   {contexts.length === 0 && <option value="">Loading Cluster...</option>}
+                 </select>
+                 <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-zinc-400">
+                    <Globe size={12} />
+                 </div>
+              </div>
+           </div>
+        </div>
+
+        <nav className="flex-1 p-6 pt-2 space-y-1.5 overflow-y-auto">
+          {menuItems.map((item) => { 
+            const Icon = item.icon; 
+            const isActive = location.pathname === item.path || (item.path !== "/" && location.pathname.startsWith(item.path)); 
+            return ( 
+              <Link key={item.path} to={item.path} className={cn("flex items-center gap-4 px-5 py-3.5 rounded-2xl transition-all text-[11px] font-bold uppercase tracking-wider", isActive ? "bg-zinc-900 text-white shadow-xl translate-x-1" : "text-zinc-400 hover:bg-zinc-50 hover:text-zinc-900")}>
+                <Icon size={18} /> {item.name}
+              </Link> 
+            ); 
+          })}
+        </nav>
+        
+        <div className="p-8 border-t"><div className="text-[10px] font-black text-zinc-400 uppercase tracking-widest tracking-[0.3em]">Stable v1.3.0</div></div>
+      </aside>
       <main className="flex-1 pl-72"><div className="p-12 max-w-[100rem] mx-auto">{children}</div></main>
     </div>
   );
