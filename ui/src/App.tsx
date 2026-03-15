@@ -152,12 +152,37 @@ function VMDetailContent() {
 function DVDetailContent() {
   const { namespace, name, tab } = useParams(); const navigate = useNavigate(); const [dv, setDv] = useState<DV|null>(null); const [dvYaml, setDvYaml] = useState(""); const [loading, setLoading] = useState(true); const activeTab = tab || "overview";
   useEffect(() => { const f = async () => { try { const [r, y] = await Promise.all([apiFetch(`/apis/cdi.kubevirt.io/v1beta1/namespaces/${namespace}/datavolumes/${name}`), apiFetch(`/api/v1/yaml/datavolumes/${namespace}/${name}`)]); if (r.ok) setDv(await r.json()); if (y.ok) setDvYaml(await y.text()); } finally { setLoading(false); } }; f(); }, [namespace, name]);
-  if (loading) return <div className="p-12 text-center animate-pulse">Accessing Storage...</div>; if (!dv) return <div className="p-12 text-center text-red-600 font-bold">Storage Not Found</div>;
+  if (loading) return <div className="p-12 text-center animate-pulse text-zinc-500 font-bold uppercase tracking-widest text-xs">Accessing Storage...</div>;
+  if (!dv) return <div className="p-12 text-center text-red-600 font-bold border-2 border-dashed border-red-100 rounded-xl mt-8">Storage Not Found</div>;
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
       <div className="flex items-center justify-between border-b pb-6 border-zinc-100"><div className="flex items-center gap-4"><button onClick={() => navigate(-1)} className="p-2 hover:bg-zinc-100 rounded-lg border border-zinc-200 transition-all bg-white shadow-sm"><ChevronLeft size={18} /></button><div><h2 className="text-2xl font-bold tracking-tight text-zinc-900">{dv.metadata.name}</h2><div className="flex items-center gap-3 mt-1 text-xs"><span className="font-bold text-zinc-600">{dv.metadata.namespace}</span><StatusBadge status={dv.status?.phase}/></div></div></div></div>
       <div className="flex gap-8">{[ { id: "overview", name: "Overview", icon: Info }, { id: "yaml", name: "Manifest", icon: FileCode } ].map(t => ( <Link key={t.id} to={`/dvs/${namespace}/${name}/${t.id}`} className={cn("flex items-center gap-2 pb-3 px-1 text-xs font-bold uppercase transition-all border-b-2 -mb-px", activeTab === t.id ? "border-zinc-950 text-zinc-950" : "border-transparent text-zinc-500 hover:text-zinc-800")}><t.icon size={14} /> {t.name}</Link> ))}</div>
-      <div className="mt-4">{activeTab === "overview" ? ( <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3"><Card title="Capacity" icon={HardDrive} description={dv.spec.storage?.resources?.requests?.storage || dv.spec.pvc?.resources?.requests?.storage || "N/A"} /><Card title="Transfer" icon={Activity} description={dv.status?.progress || "100%"} /><Card title="Source" icon={Zap} description={dv.spec.source ? Object.keys(dv.spec.source)[0] : "manual"} /></div> ) : ( <div className="bg-zinc-950 p-8 rounded-2xl border border-zinc-800 shadow-2xl"><pre className="text-zinc-400 text-[13px] font-mono whitespace-pre min-h-[400px]">{dvYaml || "Loading..."}</pre></div> )}</div>
+      <div className="mt-4">
+        {activeTab === "overview" ? ( 
+          <div className="space-y-6">
+            <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+              <Card title="Capacity" icon={HardDrive} description={dv.spec.storage?.resources?.requests?.storage || dv.spec.pvc?.resources?.requests?.storage || "N/A"} />
+              <Card title="Transfer" icon={Activity} description={dv.status?.progress || "100%"} />
+              <Card title="Source" icon={Zap} description={dv.spec.source ? Object.keys(dv.spec.source)[0] : "manual"} />
+            </div>
+            <div className="grid gap-6 lg:grid-cols-3">
+              <Card title="Metadata" icon={Layers} className="lg:col-span-3">
+                <div className="grid md:grid-cols-2 gap-8 mt-1 text-zinc-900">
+                  <div className="space-y-3">
+                    <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-1">Labels</div>
+                    <div className="flex flex-wrap gap-2">{Object.entries(dv.metadata.labels || {}).map(([k,v])=>( <span key={k} className="px-2 py-1 bg-zinc-50 text-zinc-700 rounded-lg text-[10px] font-bold border border-zinc-200">{k}: {v}</span> ))}</div>
+                  </div>
+                  <div className="space-y-3">
+                    <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-1">Annotations</div>
+                    <div className="grid grid-cols-1 gap-2">{Object.entries(dv.metadata.annotations || {}).slice(0,12).map(([k,v])=>( <CopyableText key={k} label={k} text={String(v)}/> ))}</div>
+                  </div>
+                </div>
+              </Card>
+            </div>
+          </div>
+        ) : ( <div className="bg-zinc-950 p-8 rounded-2xl border border-zinc-800 shadow-2xl"><pre className="text-zinc-400 text-[13px] font-mono whitespace-pre min-h-[400px]">{dvYaml || "Loading..."}</pre></div> )}
+      </div>
     </div>
   );
 }
