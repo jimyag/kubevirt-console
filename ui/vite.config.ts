@@ -10,4 +10,16 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  build: {
+    target: "esnext",
+    modulePreload: false,
+  },
+  optimizeDeps: {
+    esbuildOptions: {
+      target: "esnext",
+      supported: { 
+        "top-level-await": true 
+      },
+    },
+  },
 })

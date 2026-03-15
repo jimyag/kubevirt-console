@@ -41,6 +41,7 @@ var (
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
+	Subprotocols: []string{"binary"},
 }
 
 var defaultStatuses = []string{
@@ -67,44 +68,31 @@ func NewClusterManager() (*ClusterManager, error) {
 	}
 
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
-	if kubeconfig != "" {
-		loadingRules.ExplicitPath = kubeconfig
-	}
+	if kubeconfig != "" { loadingRules.ExplicitPath = kubeconfig }
 
 	config, err := loadingRules.Load()
 	if err != nil {
-		// Fallback to in-cluster if possible
 		log.Printf("Failed to load kubeconfig: %v. Checking in-cluster config...", err)
 		restConfig, err := rest.InClusterConfig()
-		if err != nil {
-			return nil, fmt.Errorf("could not find kubeconfig or in-cluster config: %v", err)
-		}
+		if err != nil { return nil, fmt.Errorf("could not find kubeconfig or in-cluster config: %v", err) }
 		cm.contexts = []string{"in-cluster"}
 		cm.defaultCtx = "in-cluster"
 		cm.configs["in-cluster"] = restConfig
 		return cm, nil
 	}
 
-	for name := range config.Contexts {
-		cm.contexts = append(cm.contexts, name)
-	}
+	for name := range config.Contexts { cm.contexts = append(cm.contexts, name) }
 	sort.Strings(cm.contexts)
 	cm.defaultCtx = config.CurrentContext
-	if contextName != "" {
-		cm.defaultCtx = contextName
-	}
+	if contextName != "" { cm.defaultCtx = contextName }
 
 	return cm, nil
 }
 
 func (cm *ClusterManager) getClient(r *http.Request) (kubecli.KubevirtClient, dynamic.Interface, *httputil.ReverseProxy, error) {
 	ctxName := r.Header.Get("X-Kube-Context")
-	if ctxName == "" {
-		ctxName = r.URL.Query().Get("context")
-	}
-	if ctxName == "" {
-		ctxName = cm.defaultCtx
-	}
+	if ctxName == "" { ctxName = r.URL.Query().Get("context") }
+	if ctxName == "" { ctxName = cm.defaultCtx }
 
 	cm.mu.RLock()
 	client, ok := cm.clients[ctxName]
@@ -112,32 +100,22 @@ func (cm *ClusterManager) getClient(r *http.Request) (kubecli.KubevirtClient, dy
 	proxy, ok3 := cm.proxies[ctxName]
 	cm.mu.RUnlock()
 
-	if ok && ok2 && ok3 {
-		return client, dyn, proxy, nil
-	}
+	if ok && ok2 && ok3 { return client, dyn, proxy, nil }
 
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
-	// Re-check after lock
-	if client, ok := cm.clients[ctxName]; ok {
-		return client, cm.dynamics[ctxName], cm.proxies[ctxName], nil
-	}
+	if client, ok := cm.clients[ctxName]; ok { return client, cm.dynamics[ctxName], cm.proxies[ctxName], nil }
 
 	log.Printf("Initializing clients for context: %s", ctxName)
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
-	if kubeconfig != "" {
-		loadingRules.ExplicitPath = kubeconfig
-	}
+	if kubeconfig != "" { loadingRules.ExplicitPath = kubeconfig }
 	configOverrides := &clientcmd.ConfigOverrides{CurrentContext: ctxName}
 	clientConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
 	
 	restConfig, err := clientConfig.ClientConfig()
 	if err != nil {
-		// If explicit context fail, fallback to in-cluster or default
-		if ctxName == "in-cluster" {
-			restConfig, err = rest.InClusterConfig()
-		}
+		if ctxName == "in-cluster" { restConfig, err = rest.InClusterConfig() }
 		if err != nil { return nil, nil, nil, err }
 	}
 
@@ -209,10 +187,7 @@ func runServer(cm *ClusterManager, addr string) error {
 
 	mux.HandleFunc("/api/v1/contexts", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"contexts": cm.contexts,
-			"default":  cm.defaultCtx,
-		})
+		json.NewEncoder(w).Encode(map[string]interface{}{ "contexts": cm.contexts, "default":  cm.defaultCtx })
 	})
 
 	mux.HandleFunc("/api/v1/vms", func(w http.ResponseWriter, r *http.Request) {
@@ -235,12 +210,8 @@ func runServer(cm *ClusterManager, addr string) error {
 	mux.HandleFunc("/api/v1/yaml/", func(w http.ResponseWriter, r *http.Request) {
 		_, dynClient, _, err := cm.getClient(r)
 		if err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
-
 		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/yaml/"), "/")
-		if len(parts) < 3 {
-			http.Error(w, "invalid path", http.StatusBadRequest)
-			return
-		}
+		if len(parts) < 3 { http.Error(w, "invalid path", http.StatusBadRequest); return }
 		resType, ns, name := parts[0], parts[1], parts[2]
 		var gvr schema.GroupVersionResource
 		var apiVersion, kind string
@@ -250,25 +221,12 @@ func runServer(cm *ClusterManager, addr string) error {
 		} else if resType == "datavolumes" {
 			gvr = schema.GroupVersionResource{Group: "cdi.kubevirt.io", Version: "v1beta1", Resource: "datavolumes"}
 			apiVersion, kind = "cdi.kubevirt.io/v1beta1", "DataVolume"
-		} else {
-			http.Error(w, "unsupported resource type", http.StatusBadRequest)
-			return
-		}
+		} else { http.Error(w, "unsupported resource type", http.StatusBadRequest); return }
 		obj, err := dynClient.Resource(gvr).Namespace(ns).Get(context.Background(), name, metav1.GetOptions{})
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
-			return
-		}
-		obj.SetManagedFields(nil)
-		obj.SetResourceVersion("")
-		obj.SetGeneration(0)
-		obj.SetUID("")
-		raw := obj.UnstructuredContent()
-		raw["apiVersion"] = apiVersion
-		raw["kind"] = kind
-		data, _ := yaml.Marshal(raw)
-		w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
-		w.Write(data)
+		if err != nil { http.Error(w, err.Error(), http.StatusNotFound); return }
+		obj.SetManagedFields(nil); obj.SetResourceVersion(""); obj.SetGeneration(0); obj.SetUID("")
+		raw := obj.UnstructuredContent(); raw["apiVersion"] = apiVersion; raw["kind"] = kind
+		data, _ := yaml.Marshal(raw); w.Header().Set("Content-Type", "text/yaml; charset=utf-8"); w.Write(data)
 	})
 
 	mux.HandleFunc("/api/v1/namespaces-list", func(w http.ResponseWriter, r *http.Request) {
@@ -279,8 +237,7 @@ func runServer(cm *ClusterManager, addr string) error {
 		for _, vm := range vms.Items { nsMap[vm.Namespace] = true }
 		nss := []string{"all"}
 		for ns := range nsMap { nss = append(nss, ns) }
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(nss)
+		w.Header().Set("Content-Type", "application/json"); json.NewEncoder(w).Encode(nss)
 	})
 
 	mux.HandleFunc("/apis/", func(w http.ResponseWriter, r *http.Request) {
@@ -311,6 +268,7 @@ func runServer(cm *ClusterManager, addr string) error {
 func handleWebsocket(client kubecli.KubevirtClient, w http.ResponseWriter, r *http.Request) {
 	namespace := r.URL.Query().Get("namespace")
 	vmi := r.URL.Query().Get("vmi")
+	wsType := r.URL.Query().Get("type")
 	if namespace == "" || vmi == "" {
 		http.Error(w, "missing namespace or vmi", http.StatusBadRequest)
 		return
@@ -330,25 +288,44 @@ func handleWebsocket(client kubecli.KubevirtClient, w http.ResponseWriter, r *ht
 	runningChan := make(chan error, 1)
 
 	go func() {
-		console, err := client.VirtualMachineInstance(namespace).SerialConsole(vmi, &kvcorev1.SerialConsoleOptions{ConnectionTimeout: 10 * time.Minute})
-		runningChan <- err
-		if err != nil { return }
-		resChan <- console.Stream(kvcorev1.StreamOptions{ In: stdinReader, Out: stdoutWriter })
+		var err error
+		if wsType == "vnc" {
+			log.Printf("Attempting VNC connection for %s/%s", namespace, vmi)
+			vnc, vncErr := client.VirtualMachineInstance(namespace).VNC(vmi)
+			err = vncErr
+			runningChan <- err
+			if err == nil {
+				log.Printf("VNC stream established for %s/%s", namespace, vmi)
+				resChan <- vnc.Stream(kvcorev1.StreamOptions{In: stdinReader, Out: stdoutWriter})
+			} else {
+				log.Printf("VNC connection failed for %s/%s: %v", namespace, vmi, err)
+			}
+		} else {
+			console, consoleErr := client.VirtualMachineInstance(namespace).SerialConsole(vmi, &kvcorev1.SerialConsoleOptions{ConnectionTimeout: 10 * time.Minute})
+			err = consoleErr
+			runningChan <- err
+			if err == nil {
+				resChan <- console.Stream(kvcorev1.StreamOptions{In: stdinReader, Out: stdoutWriter})
+			}
+		}
 	}()
 
 	if err := <-runningChan; err != nil {
-		_ = conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("serial console error: %v", err)))
+		_ = conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("console error: %v", err)))
 		return
 	}
 
-	_ = conn.WriteMessage(websocket.TextMessage, []byte("serial console ready"))
-	stdinWriter.Write([]byte("\r"))
+	// For VNC, do NOT send any ready message. The client expects raw RFB data immediately.
+	if wsType != "vnc" {
+		_ = conn.WriteMessage(websocket.TextMessage, []byte("serial console ready"))
+		stdinWriter.Write([]byte("\r"))
+	}
 
 	writeErr := make(chan error, 1)
 	readErr := make(chan error, 1)
 
 	go func() {
-		buffer := make([]byte, 1024)
+		buffer := make([]byte, 65536)
 		for {
 			n, err := stdoutReader.Read(buffer)
 			if n > 0 {
