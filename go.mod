@@ -4,10 +4,7 @@ go 1.25
 
 require (
 	github.com/gorilla/websocket v1.5.3
-	github.com/jimmicro/version v1.0.0
-	github.com/spf13/cobra v1.10.1
-	github.com/spf13/pflag v1.0.10
-	golang.org/x/term v0.36.0
+	github.com/spf13/cobra v1.10.2
 	k8s.io/apimachinery v0.32.5
 	k8s.io/client-go v0.32.5
 	kubevirt.io/api v1.6.2
@@ -51,11 +48,13 @@ require (
 	github.com/openshift/custom-resource-status v1.1.2 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring v0.68.0 // indirect
+	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	go.uber.org/mock v0.5.1 // indirect
 	golang.org/x/net v0.38.0 // indirect
 	golang.org/x/oauth2 v0.27.0 // indirect
 	golang.org/x/sys v0.37.0 // indirect
+	golang.org/x/term v0.36.0 // indirect
 	golang.org/x/text v0.23.0 // indirect
 	golang.org/x/time v0.7.0 // indirect
 	google.golang.org/protobuf v1.35.1 // indirect
