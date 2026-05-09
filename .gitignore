@@ -4,3 +4,5 @@ kubevirt-dashboard
 vm-statuses.txt
 dashboard/ui/node_modules
 dashboard/ui/dist
+
+kite
