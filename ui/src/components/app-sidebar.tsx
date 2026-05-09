@@ -1,5 +1,22 @@
 import { useEffect, useState } from "react"
-import { Cpu, Globe, HardDrive, LayoutDashboard, Terminal } from "lucide-react"
+import {
+  Boxes,
+  Camera,
+  Cpu,
+  Globe,
+  HardDrive,
+  KeyRound,
+  LayoutDashboard,
+  Image,
+  Network,
+  Route,
+  Scale,
+  Server,
+  Settings,
+  Shield,
+  Terminal,
+  Undo2,
+} from "lucide-react"
 import { Link, useLocation } from "react-router-dom"
 
 import {
@@ -8,7 +25,6 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
@@ -22,6 +38,19 @@ const navItems = [
   { name: "Overview", path: "/", icon: LayoutDashboard },
   { name: "Machines", path: "/vms", icon: Cpu },
   { name: "Storage", path: "/dvs", icon: HardDrive },
+  { name: "VM Pools", path: "/vmpools", icon: Boxes },
+  { name: "Nodes", path: "/nodes", icon: Server },
+  { name: "Networks", path: "/networks", icon: Network },
+  { name: "Load Balancers", path: "/load-balancers", icon: Route },
+  { name: "Instance Types", path: "/instance-types", icon: Cpu },
+  { name: "Snapshots", path: "/snapshots", icon: Camera },
+  { name: "Restores", path: "/restores", icon: Undo2 },
+  { name: "SSH Keys", path: "/ssh-keys", icon: KeyRound },
+  { name: "Firewalls", path: "/firewalls", icon: Shield },
+  { name: "Autoscaling", path: "/autoscaling", icon: Scale },
+  { name: "K8s Clusters", path: "/clusters", icon: Globe },
+  { name: "Images", path: "/images", icon: Image },
+  { name: "Settings", path: "/settings", icon: Settings },
 ]
 
 export function AppSidebar() {
@@ -82,9 +111,6 @@ export function AppSidebar() {
 
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel className="text-xs font-bold uppercase tracking-wide text-muted-foreground">
-            Navigation
-          </SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {navItems.map((item) => (

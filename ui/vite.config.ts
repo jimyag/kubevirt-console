@@ -5,6 +5,12 @@ import tailwindcss from "@tailwindcss/vite"
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  server: {
+    proxy: {
+      "/api": "http://127.0.0.1:11111",
+      "/apis": "http://127.0.0.1:11111",
+    },
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

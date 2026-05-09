@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route, Link, useParams, useNavigate, Navigate } 
 import {
   Cpu, Terminal, ChevronLeft, FileCode, Info, Network, HardDrive,
   Layers, ShieldCheck, Server, Database, Hash, Bell, Clock, TrendingUp, BarChart3,
-  Search, Box, Filter, Check, Copy, MousePointer2
+  Search, Box, Filter, Check, Copy, MousePointer2, Settings
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from "recharts";
@@ -11,12 +11,22 @@ import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, A
 import { VncConsole } from "./components/VncConsole";
 import { SerialConsole } from "./components/SerialConsole";
 import { AppSidebar } from "./components/app-sidebar";
+import { ResourceCreateDialog, ResourceDetail, ResourceList, type CreateFormField, type ResourceAction, type ResourceConfig } from "./components/resource-management";
 import { SiteHeader } from "./components/site-header";
 import { SidebarInset, SidebarProvider } from "./components/ui/sidebar";
 import { Toaster } from "./components/ui/sonner";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Card as ShadCard, CardContent, CardDescription, CardHeader, CardTitle } from "./components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "./components/ui/dialog";
 import { Input } from "./components/ui/input";
 import {
   Table,
@@ -27,11 +37,1360 @@ import {
   TableRow,
 } from "./components/ui/table";
 
+const namespaceNameFields = (name: string, namespace = "default"): CreateFormField[] => [
+  { name: "name", label: "Name", defaultValue: name, required: true },
+  { name: "namespace", label: "Namespace", defaultValue: namespace, required: true },
+];
+
+const numberValue = (value: string | boolean, fallback: number) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const stringValue = (value: string | boolean | undefined, fallback = "") => {
+  const next = String(value ?? "").trim();
+  return next || fallback;
+};
+
+const getRecord = (value: unknown) => (value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {});
+const listNames = (value: unknown) => Array.isArray(value) ? value.map((item) => item?.name || item?.metadata?.name || JSON.stringify(item)).join(", ") : "";
+const selectorText = (value: unknown) => Object.entries(getRecord(value)).map(([key, val]) => `${key}=${val}`).join(", ");
+const mergePatch = (body: unknown): RequestInit => ({
+  method: "PATCH",
+  headers: { "Content-Type": "application/merge-patch+json", Accept: "application/json" },
+  body: JSON.stringify(body),
+});
+const jsonPost = (body: unknown): RequestInit => ({
+  method: "POST",
+  headers: { "Content-Type": "application/json", Accept: "application/json" },
+  body: JSON.stringify(body),
+});
+const jsonPut = (body: unknown = {}): RequestInit => ({
+  method: "PUT",
+  headers: { "Content-Type": "application/json", Accept: "application/json" },
+  body: JSON.stringify(body),
+});
+const resourceRefPath = (base: string, id: string, resource: { metadata: { namespace?: string; name: string } }) =>
+  `${base}${resource.metadata.namespace ? `/namespaces/${resource.metadata.namespace}` : ""}/${id}/${resource.metadata.name}`;
+const createPathByKind = (resource: { kind?: string; metadata: { namespace?: string } }) => {
+  const ns = resource.metadata.namespace ? `/namespaces/${resource.metadata.namespace}` : "";
+  switch (resource.kind) {
+    case "Cluster":
+      return `/apis/cluster.x-k8s.io/v1beta1${ns}/clusters`;
+    case "KubevirtCluster":
+      return `/apis/infrastructure.cluster.x-k8s.io/v1alpha1${ns}/kubevirtclusters`;
+    case "KubeadmControlPlane":
+      return `/apis/controlplane.cluster.x-k8s.io/v1beta1${ns}/kubeadmcontrolplanes`;
+    case "KubevirtMachineTemplate":
+      return `/apis/infrastructure.cluster.x-k8s.io/v1alpha1${ns}/kubevirtmachinetemplates`;
+    case "KubeadmConfigTemplate":
+      return `/apis/bootstrap.cluster.x-k8s.io/v1beta1${ns}/kubeadmconfigtemplates`;
+    case "MachineDeployment":
+      return `/apis/cluster.x-k8s.io/v1beta1${ns}/machinedeployments`;
+    case "MachineHealthCheck":
+      return `/apis/cluster.x-k8s.io/v1beta1${ns}/machinehealthchecks`;
+    default:
+      return "";
+  }
+};
+
+const poolActions: ResourceAction[] = [
+  {
+    id: "start-pool",
+    label: "Start",
+    description: "Set the pool VM template run strategy to Always.",
+    buildRequest: (resource) => ({
+      url: resourceRefPath("/apis/pool.kubevirt.io/v1alpha1", "virtualmachinepools", resource),
+      options: mergePatch({ spec: { virtualMachineTemplate: { spec: { runStrategy: "Always" } } } }),
+    }),
+  },
+  {
+    id: "stop-pool",
+    label: "Stop",
+    description: "Set the pool VM template run strategy to Halted.",
+    buildRequest: (resource) => ({
+      url: resourceRefPath("/apis/pool.kubevirt.io/v1alpha1", "virtualmachinepools", resource),
+      options: mergePatch({ spec: { virtualMachineTemplate: { spec: { runStrategy: "Halted" } } } }),
+    }),
+  },
+  {
+    id: "scale-pool",
+    label: "Scale",
+    fields: [{ name: "replicas", label: "Replicas", type: "number", defaultValue: (r) => String(getRecord(r.spec).replicas || 1) }],
+    buildRequest: (resource, values) => ({
+      url: resourceRefPath("/apis/pool.kubevirt.io/v1alpha1", "virtualmachinepools", resource),
+      options: mergePatch({ spec: { replicas: numberValue(values.replicas, 1) } }),
+    }),
+  },
+  {
+    id: "resize-pool",
+    label: "Resize",
+    fields: [
+      { name: "sockets", label: "Sockets", type: "number", defaultValue: "1" },
+      { name: "cores", label: "Cores", type: "number", defaultValue: "1" },
+      { name: "threads", label: "Threads", type: "number", defaultValue: "1" },
+      { name: "memory", label: "Memory", defaultValue: "1Gi" },
+    ],
+    buildRequest: (resource, values) => ({
+      url: resourceRefPath("/apis/pool.kubevirt.io/v1alpha1", "virtualmachinepools", resource),
+      options: mergePatch({
+        spec: {
+          virtualMachineTemplate: {
+            spec: {
+              template: {
+                spec: {
+                  domain: {
+                    cpu: {
+                      sockets: numberValue(values.sockets, 1),
+                      cores: numberValue(values.cores, 1),
+                      threads: numberValue(values.threads, 1),
+                    },
+                    resources: { requests: { memory: stringValue(values.memory, "1Gi") } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+    }),
+  },
+  {
+    id: "pool-run-strategy",
+    label: "Run Strategy",
+    fields: [{ name: "runStrategy", label: "Run Strategy", type: "select", defaultValue: "Always", options: [{ label: "Always", value: "Always" }, { label: "Halted", value: "Halted" }, { label: "Manual", value: "Manual" }] }],
+    buildRequest: (resource, values) => ({
+      url: resourceRefPath("/apis/pool.kubevirt.io/v1alpha1", "virtualmachinepools", resource),
+      options: mergePatch({ spec: { virtualMachineTemplate: { spec: { runStrategy: stringValue(values.runStrategy, "Always") } } } }),
+    }),
+  },
+  {
+    id: "pool-instance-type",
+    label: "Instance Type",
+    fields: [{ name: "instanceType", label: "Cluster Instance Type", defaultValue: "" }],
+    buildRequest: (resource, values) => ({
+      url: resourceRefPath("/apis/pool.kubevirt.io/v1alpha1", "virtualmachinepools", resource),
+      options: mergePatch({ spec: { virtualMachineTemplate: { spec: { instancetype: { name: stringValue(values.instanceType) } } } } }),
+    }),
+  },
+  {
+    id: "pool-priority-class",
+    label: "Priority Class",
+    fields: [{ name: "priorityClassName", label: "Priority Class Name", defaultValue: "" }],
+    buildRequest: (resource, values) => ({
+      url: resourceRefPath("/apis/pool.kubevirt.io/v1alpha1", "virtualmachinepools", resource),
+      options: mergePatch({ spec: { virtualMachineTemplate: { spec: { template: { spec: { priorityClassName: stringValue(values.priorityClassName) } } } } } }),
+    }),
+  },
+  {
+    id: "detach-vm",
+    label: "Detach VM",
+    description: "Remove pool ownership labels from a VM and pin it to a selected node.",
+    fields: [
+      { name: "vmName", label: "VM Name", defaultValue: "" },
+      { name: "nodeName", label: "Target Node", defaultValue: "" },
+    ],
+    buildRequest: (resource, values) => {
+      const vmName = stringValue(values.vmName);
+      return {
+        url: `/apis/kubevirt.io/v1/namespaces/${resource.metadata.namespace}/virtualmachines/${vmName}`,
+        options: mergePatch({
+          metadata: {
+            labels: {
+              "kubevirt.io/domain": vmName,
+              "kubevirt.io/vm-pool-revision-name": null,
+              "kubevirt.io/vmpool": null,
+            },
+            ownerReferences: null,
+          },
+          spec: {
+            template: {
+              metadata: {
+                labels: {
+                  "kubevirt.io/domain": vmName,
+                  "kubevirt.io/vm-pool-revision-name": null,
+                  "kubevirt.io/vmpool": null,
+                },
+              },
+              spec: { nodeSelector: { "kubernetes.io/hostname": stringValue(values.nodeName) } },
+            },
+          },
+        }),
+      };
+    },
+  },
+  {
+    id: "set-liveness",
+    label: "Liveness Probe",
+    description: "Set or clear the VM template livenessProbe. Enter JSON for the probe, or leave empty to clear it.",
+    fields: [{ name: "probe", label: "Probe JSON", type: "textarea", defaultValue: "" }],
+    buildRequest: (resource, values) => {
+      const probe = stringValue(values.probe);
+      return {
+        url: resourceRefPath("/apis/pool.kubevirt.io/v1alpha1", "virtualmachinepools", resource),
+        options: mergePatch({ spec: { virtualMachineTemplate: { spec: { template: { spec: { livenessProbe: probe ? JSON.parse(probe) : null } } } } } }),
+      };
+    },
+  },
+  {
+    id: "set-readiness",
+    label: "Readiness Probe",
+    description: "Set or clear the VM template readinessProbe. Enter JSON for the probe, or leave empty to clear it.",
+    fields: [{ name: "probe", label: "Probe JSON", type: "textarea", defaultValue: "" }],
+    buildRequest: (resource, values) => {
+      const probe = stringValue(values.probe);
+      return {
+        url: resourceRefPath("/apis/pool.kubevirt.io/v1alpha1", "virtualmachinepools", resource),
+        options: mergePatch({ spec: { virtualMachineTemplate: { spec: { template: { spec: { readinessProbe: probe ? JSON.parse(probe) : null } } } } } }),
+      };
+    },
+  },
+];
+
+const serviceActions: ResourceAction[] = [
+  {
+    id: "service-type",
+    label: "Change Type",
+    fields: [{ name: "type", label: "Service Type", type: "select", defaultValue: (r) => String(getRecord(r.spec).type || "ClusterIP"), options: [{ label: "ClusterIP", value: "ClusterIP" }, { label: "NodePort", value: "NodePort" }, { label: "LoadBalancer", value: "LoadBalancer" }] }],
+    buildRequest: (resource, values) => ({
+      url: resourceRefPath("/api/v1", "services", resource),
+      options: mergePatch({ spec: { type: stringValue(values.type, "ClusterIP") } }),
+    }),
+  },
+];
+
+const instanceTypeActions: ResourceAction[] = [
+  {
+    id: "edit-shape",
+    label: "Edit Shape",
+    fields: [
+      { name: "cpu", label: "Guest CPUs", type: "number", defaultValue: (r) => String(getRecord(getRecord(r.spec).cpu).guest || 1) },
+      { name: "memory", label: "Guest Memory", defaultValue: (r) => String(getRecord(getRecord(r.spec).memory).guest || "1Gi") },
+    ],
+    buildRequest: (resource, values) => ({
+      url: resourceRefPath("/apis/instancetype.kubevirt.io/v1beta1", "virtualmachineclusterinstancetypes", resource),
+      options: mergePatch({ spec: { cpu: { guest: numberValue(values.cpu, 1) }, memory: { guest: stringValue(values.memory, "1Gi") } } }),
+    }),
+  },
+];
+
+const hpaActions: ResourceAction[] = [
+  {
+    id: "scale-bounds",
+    label: "Scale Bounds",
+    fields: [
+      { name: "minReplicas", label: "Min Replicas", type: "number", defaultValue: (r) => String(getRecord(r.spec).minReplicas || 1) },
+      { name: "maxReplicas", label: "Max Replicas", type: "number", defaultValue: (r) => String(getRecord(r.spec).maxReplicas || 3) },
+      { name: "cpu", label: "CPU Utilization", type: "number", defaultValue: "80" },
+    ],
+    buildRequest: (resource, values) => ({
+      url: resourceRefPath("/apis/autoscaling/v2", "horizontalpodautoscalers", resource),
+      options: mergePatch({
+        spec: {
+          minReplicas: numberValue(values.minReplicas, 1),
+          maxReplicas: numberValue(values.maxReplicas, 3),
+          metrics: [{ type: "Resource", resource: { name: "cpu", target: { type: "Utilization", averageUtilization: numberValue(values.cpu, 80) } } }],
+        },
+      }),
+    }),
+  },
+];
+
+const networkPolicyActions: ResourceAction[] = [
+  {
+    id: "set-rules",
+    label: "Set Rules",
+    description: "Replace simple ingress/egress rules using optional CIDR and TCP ports.",
+    fields: [
+      { name: "policyType", label: "Policy Type", type: "select", defaultValue: "Ingress", options: [{ label: "Ingress", value: "Ingress" }, { label: "Egress", value: "Egress" }, { label: "Ingress and Egress", value: "Both" }] },
+      { name: "ingressPort", label: "Ingress TCP Port", defaultValue: "", placeholder: "optional" },
+      { name: "ingressCidr", label: "Ingress CIDR", defaultValue: "", placeholder: "0.0.0.0/0" },
+      { name: "egressPort", label: "Egress TCP Port", defaultValue: "", placeholder: "optional" },
+      { name: "egressCidr", label: "Egress CIDR", defaultValue: "", placeholder: "0.0.0.0/0" },
+    ],
+    buildRequest: (resource, values) => {
+      const policyType = stringValue(values.policyType, "Ingress");
+      const policyTypes = policyType === "Both" ? ["Ingress", "Egress"] : [policyType];
+      const ingressPort = stringValue(values.ingressPort);
+      const egressPort = stringValue(values.egressPort);
+      const ingressCidr = stringValue(values.ingressCidr);
+      const egressCidr = stringValue(values.egressCidr);
+      return {
+        url: resourceRefPath("/apis/networking.k8s.io/v1", "networkpolicies", resource),
+        options: mergePatch({
+          spec: {
+            policyTypes,
+            ...(policyTypes.includes("Ingress") ? {
+              ingress: [{
+                ...(ingressCidr ? { from: [{ ipBlock: { cidr: ingressCidr } }] } : {}),
+                ...(ingressPort ? { ports: [{ protocol: "TCP", port: numberValue(ingressPort, 1) }] } : {}),
+              }],
+            } : { ingress: null }),
+            ...(policyTypes.includes("Egress") ? {
+              egress: [{
+                ...(egressCidr ? { to: [{ ipBlock: { cidr: egressCidr } }] } : {}),
+                ...(egressPort ? { ports: [{ protocol: "TCP", port: numberValue(egressPort, 1) }] } : {}),
+              }],
+            } : { egress: null }),
+          },
+        }),
+      };
+    },
+  },
+];
+
+const imageActions: ResourceAction[] = [
+  {
+    id: "edit-image",
+    label: "Edit Image",
+    fields: [
+      { name: "readableName", label: "Readable Name", defaultValue: (r) => String(getRecord(r.spec).readableName || r.metadata.name) },
+      { name: "readableDescription", label: "Description", defaultValue: (r) => String(getRecord(r.spec).readableDescription || "") },
+      { name: "credentials", label: "Credentials Secret", defaultValue: (r) => String(getRecord(r.spec).credentials || "") },
+      { name: "value", label: "Source URL / PVC Name", defaultValue: (r) => {
+        const spec = getRecord(r.spec);
+        return String(getRecord(spec.http).url || getRecord(spec.gcs).url || getRecord(spec.s3).url || getRecord(spec.registry).url || getRecord(spec.pvc).name || "");
+      } },
+    ],
+    buildRequest: (resource, values) => {
+      const spec = getRecord(resource.spec);
+      const type = stringValue(spec.type, "http");
+      const value = stringValue(values.value);
+      return {
+        url: resourceRefPath("/apis/kubevirt-manager.io/v1", "images", resource),
+        options: mergePatch({
+          spec: {
+            type,
+            readableName: stringValue(values.readableName, resource.metadata.name),
+            readableDescription: stringValue(values.readableDescription),
+            credentials: stringValue(values.credentials),
+            ...(type === "pvc" ? { pvc: { name: value, namespace: resource.metadata.namespace } } : { [type]: { url: value } }),
+          },
+        }),
+      };
+    },
+  },
+];
+
+export const vmCreateConfig: ResourceConfig = {
+  id: "virtualmachines",
+  path: "/vms",
+  title: "Virtual Machines",
+  subtitle: "Create a KubeVirt virtual machine",
+  listPath: "/apis/kubevirt.io/v1/virtualmachines",
+  namespaced: true,
+  resourcePath: "/apis/kubevirt.io/v1",
+  kind: "VirtualMachine",
+  createTemplate: "",
+  createFields: [
+    ...namespaceNameFields("example-vm"),
+    { name: "runStrategy", label: "Run Strategy", type: "select", defaultValue: "Halted", options: [{ label: "Halted", value: "Halted" }, { label: "Always", value: "Always" }, { label: "Manual", value: "Manual" }] },
+    { name: "cpu", label: "CPU Cores", type: "number", defaultValue: "1" },
+    { name: "memory", label: "Memory", defaultValue: "1Gi", placeholder: "1Gi" },
+    { name: "containerImage", label: "Container Disk Image", defaultValue: "quay.io/containerdisks/fedora:latest" },
+    { name: "cloudInit", label: "Cloud-init User Data", type: "textarea", defaultValue: "#cloud-config\npassword: kubevirt\nchpasswd: { expire: False }\nssh_pwauth: True" },
+  ],
+  buildCreateResource: (values) => {
+    const name = stringValue(values.name, "example-vm");
+    return {
+      apiVersion: "kubevirt.io/v1",
+      kind: "VirtualMachine",
+      metadata: {
+        name,
+        namespace: stringValue(values.namespace, "default"),
+        labels: { "kubevirt-manager.io/managed": "true", "kubevirt.io/domain": name },
+      },
+      spec: {
+        runStrategy: stringValue(values.runStrategy, "Halted"),
+        template: {
+          metadata: { labels: { "kubevirt.io/domain": name } },
+          spec: {
+            domain: {
+              cpu: { cores: numberValue(values.cpu, 1) },
+              resources: { requests: { memory: stringValue(values.memory, "1Gi") } },
+              devices: {
+                disks: [
+                  { name: "containerdisk", disk: { bus: "virtio" } },
+                  { name: "cloudinitdisk", disk: { bus: "virtio" } },
+                ],
+                interfaces: [{ name: "default", masquerade: {} }],
+              },
+            },
+            networks: [{ name: "default", pod: {} }],
+            volumes: [
+              { name: "containerdisk", containerDisk: { image: stringValue(values.containerImage, "quay.io/containerdisks/fedora:latest") } },
+              { name: "cloudinitdisk", cloudInitNoCloud: { userData: stringValue(values.cloudInit) } },
+            ],
+          },
+        },
+      },
+    };
+  },
+};
+
+export const dvCreateConfig: ResourceConfig = {
+  id: "datavolumes",
+  path: "/dvs",
+  title: "DataVolumes",
+  subtitle: "Create a CDI DataVolume",
+  listPath: "/apis/cdi.kubevirt.io/v1beta1/datavolumes",
+  namespaced: true,
+  resourcePath: "/apis/cdi.kubevirt.io/v1beta1",
+  kind: "DataVolume",
+  createTemplate: "",
+  createFields: [
+    ...namespaceNameFields("example-disk"),
+    { name: "storage", label: "Storage Size", defaultValue: "10Gi" },
+    { name: "accessMode", label: "Access Mode", type: "select", defaultValue: "ReadWriteOnce", options: [{ label: "ReadWriteOnce", value: "ReadWriteOnce" }, { label: "ReadWriteMany", value: "ReadWriteMany" }] },
+    { name: "volumeMode", label: "Volume Mode", type: "select", defaultValue: "Filesystem", options: [{ label: "Filesystem", value: "Filesystem" }, { label: "Block", value: "Block" }] },
+    { name: "storageClassName", label: "Storage Class", defaultValue: "", placeholder: "optional" },
+    { name: "sourceType", label: "Source", type: "select", defaultValue: "blank", options: [{ label: "Blank", value: "blank" }, { label: "HTTP Image", value: "http" }, { label: "Registry Image", value: "registry" }, { label: "PVC Clone", value: "pvc" }, { label: "Upload", value: "upload" }] },
+    { name: "sourceUrl", label: "HTTP / Registry Source", defaultValue: "", placeholder: "https://example.com/disk.qcow2 or docker://..." },
+    { name: "sourceNamespace", label: "Source PVC Namespace", defaultValue: "", placeholder: "for PVC clone" },
+    { name: "sourcePvc", label: "Source PVC Name", defaultValue: "", placeholder: "for PVC clone" },
+  ],
+  buildCreateResource: (values) => {
+    const storageClassName = stringValue(values.storageClassName);
+    const sourceType = stringValue(values.sourceType, "blank");
+    const source = sourceType === "http"
+      ? { http: { url: stringValue(values.sourceUrl, "https://example.com/disk.qcow2") } }
+      : sourceType === "registry"
+        ? { registry: { url: stringValue(values.sourceUrl, "docker://quay.io/containerdisks/fedora:latest") } }
+        : sourceType === "pvc"
+          ? { pvc: { namespace: stringValue(values.sourceNamespace, stringValue(values.namespace, "default")), name: stringValue(values.sourcePvc, "source-pvc") } }
+          : sourceType === "upload"
+            ? { upload: {} }
+            : { blank: {} };
+    return {
+      apiVersion: "cdi.kubevirt.io/v1beta1",
+      kind: "DataVolume",
+      metadata: {
+        name: stringValue(values.name, "example-disk"),
+        namespace: stringValue(values.namespace, "default"),
+        labels: { "kubevirt-manager.io/managed": "true" },
+      },
+      spec: {
+        source,
+        storage: {
+          ...(storageClassName ? { storageClassName } : {}),
+          accessModes: [stringValue(values.accessMode, "ReadWriteOnce")],
+          volumeMode: stringValue(values.volumeMode, "Filesystem"),
+          resources: { requests: { storage: stringValue(values.storage, "10Gi") } },
+        },
+      },
+    };
+  },
+};
+
+export const resourceConfigs: Record<string, ResourceConfig> = {
+  virtualmachinepools: {
+    id: "virtualmachinepools",
+    path: "/vmpools",
+    title: "VM Pools",
+    subtitle: "Manage KubeVirt VirtualMachinePool resources",
+    listPath: "/apis/pool.kubevirt.io/v1alpha1/virtualmachinepools",
+    namespaced: true,
+    resourcePath: "/apis/pool.kubevirt.io/v1alpha1",
+    kind: "VirtualMachinePool",
+    actions: poolActions,
+    createFields: [
+      ...namespaceNameFields("example-pool"),
+      { name: "replicas", label: "Replicas", type: "number", defaultValue: "1" },
+      { name: "cpu", label: "CPU Cores", type: "number", defaultValue: "1" },
+      { name: "memory", label: "Memory", defaultValue: "1Gi" },
+      { name: "containerImage", label: "Container Disk Image", defaultValue: "quay.io/containerdisks/fedora:latest" },
+    ],
+    buildCreateResource: (values) => {
+      const name = stringValue(values.name, "example-pool");
+      return {
+        apiVersion: "pool.kubevirt.io/v1alpha1",
+        kind: "VirtualMachinePool",
+        metadata: { name, namespace: stringValue(values.namespace, "default"), labels: { "kubevirt-manager.io/managed": "true" } },
+        spec: {
+          replicas: numberValue(values.replicas, 1),
+          selector: { matchLabels: { "kubevirt.io/vmpool": name } },
+          virtualMachineTemplate: {
+            metadata: { labels: { "kubevirt.io/vmpool": name, "kubevirt-manager.io/managed": "true" } },
+            spec: {
+              runStrategy: "Always",
+              template: {
+                metadata: { labels: { "kubevirt.io/vmpool": name } },
+                spec: {
+                  domain: {
+                    cpu: { cores: numberValue(values.cpu, 1) },
+                    resources: { requests: { memory: stringValue(values.memory, "1Gi") } },
+                    devices: { disks: [{ name: "containerdisk", disk: { bus: "virtio" } }], interfaces: [{ name: "default", masquerade: {} }] },
+                  },
+                  networks: [{ name: "default", pod: {} }],
+                  volumes: [{ name: "containerdisk", containerDisk: { image: stringValue(values.containerImage, "quay.io/containerdisks/fedora:latest") } }],
+                },
+              },
+            },
+          },
+        },
+      };
+    },
+    statusPath: ["status", "readyReplicas"],
+    detailSections: (r) => {
+      const spec = getRecord(r.spec);
+      const template = getRecord(spec.virtualMachineTemplate);
+      const vmSpec = getRecord(template.spec);
+      const podSpec = getRecord(getRecord(vmSpec.template).spec);
+      const domain = getRecord(podSpec.domain);
+      const devices = getRecord(domain.devices);
+      return [
+        {
+          title: "Pool",
+          items: [
+            { label: "Replicas", value: spec.replicas },
+            { label: "Ready Replicas", value: getRecord(r.status).readyReplicas },
+            { label: "Run Strategy", value: vmSpec.runStrategy },
+            { label: "Selector", value: selectorText(getRecord(spec.selector).matchLabels) },
+          ],
+        },
+        {
+          title: "Template",
+          items: [
+            { label: "Instance Type", value: getRecord(vmSpec.instancetype).name },
+            { label: "CPU", value: getRecord(domain.cpu).cores || getRecord(domain.cpu).guest },
+            { label: "Memory", value: getRecord(getRecord(domain.resources).requests).memory },
+            { label: "Networks", value: listNames(podSpec.networks) },
+            { label: "Disks", value: listNames(devices.disks) },
+          ],
+        },
+      ];
+    },
+    extraColumns: [
+      { label: "Replicas", value: (r) => String((r.spec?.replicas as number | undefined) ?? "N/A") },
+      { label: "Ready", value: (r) => String((r.status?.readyReplicas as number | undefined) ?? 0) },
+    ],
+    createTemplate: `apiVersion: pool.kubevirt.io/v1alpha1
+kind: VirtualMachinePool
+metadata:
+  name: example-pool
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      kubevirt.io/vmpool: example-pool
+  virtualMachineTemplate:
+    metadata:
+      labels:
+        kubevirt.io/vmpool: example-pool
+    spec:
+      runStrategy: Always
+      template:
+        spec:
+          domain:
+            devices:
+              disks: []
+          volumes: []
+`,
+  },
+  nodes: {
+    id: "nodes",
+    path: "/nodes",
+    title: "Nodes",
+    subtitle: "Inspect Kubernetes nodes used by KubeVirt workloads",
+    listPath: "/api/v1/nodes",
+    namespaced: false,
+    resourcePath: "/api/v1",
+    kind: "Node",
+    allowCreate: false,
+    allowDelete: false,
+    statusPath: ["status", "conditions", "0", "type"],
+    detailSections: (r) => {
+      const status = getRecord(r.status);
+      const spec = getRecord(r.spec);
+      return [
+        {
+          title: "Capacity",
+          items: Object.entries(getRecord(status.capacity)).map(([label, value]) => ({ label, value })),
+        },
+        {
+          title: "Scheduling",
+          items: [
+            { label: "Unschedulable", value: spec.unschedulable || false },
+            { label: "Pod CIDR", value: spec.podCIDR },
+            { label: "Provider ID", value: spec.providerID },
+          ],
+        },
+      ];
+    },
+    extraColumns: [
+      { label: "CPU", value: (r) => String((r.status?.capacity as Record<string, string> | undefined)?.cpu || "N/A") },
+      { label: "Memory", value: (r) => String((r.status?.capacity as Record<string, string> | undefined)?.memory || "N/A") },
+    ],
+    createTemplate: `apiVersion: v1
+kind: Node
+metadata:
+  name: example-node
+`,
+  },
+  "network-attachment-definitions": {
+    id: "network-attachment-definitions",
+    path: "/networks",
+    title: "Networks",
+    subtitle: "Manage Multus network attachment definitions",
+    listPath: "/apis/k8s.cni.cncf.io/v1/network-attachment-definitions",
+    namespaced: true,
+    resourcePath: "/apis/k8s.cni.cncf.io/v1",
+    kind: "NetworkAttachmentDefinition",
+    createFields: [
+      ...namespaceNameFields("bridge-network"),
+      { name: "type", label: "CNI Type", type: "select", defaultValue: "bridge", options: [{ label: "Bridge", value: "bridge" }, { label: "Macvlan", value: "macvlan" }] },
+      { name: "bridge", label: "Bridge / Master", defaultValue: "br0" },
+      { name: "vlan", label: "VLAN", defaultValue: "", placeholder: "optional" },
+    ],
+    buildCreateResource: (values) => {
+      const cniType = stringValue(values.type, "bridge");
+      const vlan = stringValue(values.vlan);
+      const config = cniType === "macvlan"
+        ? { cniVersion: "0.3.1", type: "macvlan", master: stringValue(values.bridge, "eth0"), mode: "bridge", ipam: {} }
+        : { cniVersion: "0.3.1", type: "bridge", bridge: stringValue(values.bridge, "br0"), ...(vlan ? { vlan: Number(vlan) } : {}), ipam: {} };
+      return {
+        apiVersion: "k8s.cni.cncf.io/v1",
+        kind: "NetworkAttachmentDefinition",
+        metadata: { name: stringValue(values.name, "bridge-network"), namespace: stringValue(values.namespace, "default") },
+        spec: { config: JSON.stringify(config, null, 2) },
+      };
+    },
+    detailSections: (r) => {
+      let cni: unknown = getRecord(r.spec).config;
+      try { cni = typeof cni === "string" ? JSON.parse(cni) : cni; } catch {}
+      const cniRecord = getRecord(cni);
+      return [{
+        title: "CNI Configuration",
+        items: [
+          { label: "CNI Version", value: cniRecord.cniVersion },
+          { label: "Type", value: cniRecord.type },
+          { label: "Bridge", value: cniRecord.bridge },
+          { label: "Master", value: cniRecord.master },
+          { label: "VLAN", value: cniRecord.vlan },
+          { label: "IPAM", value: cniRecord.ipam },
+        ],
+      }];
+    },
+    createTemplate: `apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: bridge-network
+  namespace: default
+spec:
+  config: |
+    {
+      "cniVersion": "0.3.1",
+      "type": "bridge",
+      "bridge": "br0",
+      "ipam": {}
+    }
+`,
+  },
+  services: {
+    id: "services",
+    path: "/load-balancers",
+    title: "Load Balancers",
+    subtitle: "Manage Service resources used to expose VMs, pools, and clusters",
+    listPath: "/api/v1/services",
+    namespaced: true,
+    resourcePath: "/api/v1",
+    kind: "Service",
+    actions: serviceActions,
+    createFields: [
+      ...namespaceNameFields("example-vm-service"),
+      { name: "type", label: "Service Type", type: "select", defaultValue: "LoadBalancer", options: [{ label: "LoadBalancer", value: "LoadBalancer" }, { label: "ClusterIP", value: "ClusterIP" }, { label: "NodePort", value: "NodePort" }] },
+      { name: "selectorKey", label: "Selector Key", defaultValue: "kubevirt.io/domain" },
+      { name: "selectorValue", label: "Selector Value", defaultValue: "example-vm" },
+      { name: "portName", label: "Port Name", defaultValue: "ssh" },
+      { name: "port", label: "Port", type: "number", defaultValue: "22" },
+      { name: "targetPort", label: "Target Port", type: "number", defaultValue: "22" },
+    ],
+    buildCreateResource: (values) => ({
+      apiVersion: "v1",
+      kind: "Service",
+      metadata: { name: stringValue(values.name, "example-vm-service"), namespace: stringValue(values.namespace, "default"), labels: { "kubevirt-manager.io/managed": "true" } },
+      spec: {
+        type: stringValue(values.type, "LoadBalancer"),
+        selector: { [stringValue(values.selectorKey, "kubevirt.io/domain")]: stringValue(values.selectorValue, "example-vm") },
+        ports: [{ name: stringValue(values.portName, "ssh"), port: numberValue(values.port, 22), targetPort: numberValue(values.targetPort, 22), protocol: "TCP" }],
+      },
+    }),
+    statusPath: ["spec", "type"],
+    detailSections: (r) => {
+      const spec = getRecord(r.spec);
+      const status = getRecord(r.status);
+      return [
+        {
+          title: "Service",
+          items: [
+            { label: "Type", value: spec.type },
+            { label: "Cluster IP", value: spec.clusterIP },
+            { label: "External Traffic Policy", value: spec.externalTrafficPolicy },
+            { label: "Selector", value: selectorText(spec.selector) },
+          ],
+        },
+        {
+          title: "Ports",
+          items: (Array.isArray(spec.ports) ? spec.ports : []).map((port: any) => ({
+            label: port.name || `${port.port}`,
+            value: `${port.protocol || "TCP"} ${port.port} -> ${port.targetPort}${port.nodePort ? ` nodePort ${port.nodePort}` : ""}`,
+          })),
+        },
+        {
+          title: "Load Balancer",
+          items: [
+            { label: "Ingress", value: getRecord(status.loadBalancer).ingress },
+          ],
+        },
+      ];
+    },
+    extraColumns: [
+      { label: "Type", value: (r) => String((r.spec?.type as string | undefined) || "ClusterIP") },
+      { label: "Cluster IP", value: (r) => String((r.spec?.clusterIP as string | undefined) || "N/A") },
+    ],
+    createTemplate: `apiVersion: v1
+kind: Service
+metadata:
+  name: example-vm-service
+  namespace: default
+spec:
+  type: LoadBalancer
+  selector:
+    kubevirt.io/domain: example-vm
+  ports:
+    - name: ssh
+      port: 22
+      targetPort: 22
+`,
+  },
+  virtualmachineclusterinstancetypes: {
+    id: "virtualmachineclusterinstancetypes",
+    path: "/instance-types",
+    title: "Cluster Instance Types",
+    subtitle: "Manage reusable KubeVirt compute shapes",
+    listPath: "/apis/instancetype.kubevirt.io/v1beta1/virtualmachineclusterinstancetypes",
+    namespaced: false,
+    resourcePath: "/apis/instancetype.kubevirt.io/v1beta1",
+    kind: "VirtualMachineClusterInstancetype",
+    actions: instanceTypeActions,
+    createFields: [
+      { name: "name", label: "Name", defaultValue: "example-small", required: true },
+      { name: "cpu", label: "Guest CPUs", type: "number", defaultValue: "1" },
+      { name: "memory", label: "Guest Memory", defaultValue: "1Gi" },
+    ],
+    buildCreateResource: (values) => ({
+      apiVersion: "instancetype.kubevirt.io/v1beta1",
+      kind: "VirtualMachineClusterInstancetype",
+      metadata: { name: stringValue(values.name, "example-small") },
+      spec: { cpu: { guest: numberValue(values.cpu, 1) }, memory: { guest: stringValue(values.memory, "1Gi") } },
+    }),
+    detailSections: (r) => {
+      const spec = getRecord(r.spec);
+      return [{
+        title: "Compute Shape",
+        items: [
+          { label: "Guest CPUs", value: getRecord(spec.cpu).guest },
+          { label: "Guest Memory", value: getRecord(spec.memory).guest },
+          { label: "IO Threads Policy", value: spec.ioThreadsPolicy },
+          { label: "Launch Security", value: spec.launchSecurity },
+        ],
+      }];
+    },
+    extraColumns: [
+      { label: "CPU", value: (r) => String(((r.spec?.cpu as Record<string, unknown> | undefined)?.guest as number | undefined) ?? "N/A") },
+      { label: "Memory", value: (r) => String(((r.spec?.memory as Record<string, unknown> | undefined)?.guest as string | undefined) || "N/A") },
+    ],
+    createTemplate: `apiVersion: instancetype.kubevirt.io/v1beta1
+kind: VirtualMachineClusterInstancetype
+metadata:
+  name: example-small
+spec:
+  cpu:
+    guest: 1
+  memory:
+    guest: 1Gi
+`,
+  },
+  virtualmachinesnapshots: {
+    id: "virtualmachinesnapshots",
+    path: "/snapshots",
+    title: "Snapshots",
+    subtitle: "Create and manage KubeVirt virtual machine snapshots",
+    listPath: "/apis/snapshot.kubevirt.io/v1beta1/virtualmachinesnapshots",
+    namespaced: true,
+    resourcePath: "/apis/snapshot.kubevirt.io/v1beta1",
+    kind: "VirtualMachineSnapshot",
+    createFields: [
+      ...namespaceNameFields("example-snapshot"),
+      { name: "sourceVm", label: "Source VM", defaultValue: "example-vm", required: true },
+    ],
+    buildCreateResource: (values) => ({
+      apiVersion: "snapshot.kubevirt.io/v1beta1",
+      kind: "VirtualMachineSnapshot",
+      metadata: { name: stringValue(values.name, "example-snapshot"), namespace: stringValue(values.namespace, "default") },
+      spec: { source: { apiGroup: "kubevirt.io", kind: "VirtualMachine", name: stringValue(values.sourceVm, "example-vm") } },
+    }),
+    detailSections: (r) => {
+      const spec = getRecord(r.spec);
+      const status = getRecord(r.status);
+      return [
+        {
+          title: "Snapshot Source",
+          items: [
+            { label: "Source Kind", value: getRecord(spec.source).kind },
+            { label: "Source VM", value: getRecord(spec.source).name },
+            { label: "Ready To Use", value: status.readyToUse },
+            { label: "Creation Time", value: status.creationTime },
+          ],
+        },
+        {
+          title: "Snapshot Content",
+          items: [
+            { label: "Content Name", value: status.virtualMachineSnapshotContentName },
+            { label: "Indications", value: status.indications },
+          ],
+        },
+      ];
+    },
+    statusPath: ["status", "readyToUse"],
+    extraColumns: [
+      { label: "Source VM", value: (r) => String(((r.spec?.source as Record<string, unknown> | undefined)?.name as string | undefined) || "N/A") },
+    ],
+    createTemplate: `apiVersion: snapshot.kubevirt.io/v1beta1
+kind: VirtualMachineSnapshot
+metadata:
+  name: example-snapshot
+  namespace: default
+spec:
+  source:
+    apiGroup: kubevirt.io
+    kind: VirtualMachine
+    name: example-vm
+`,
+  },
+  virtualmachinerestores: {
+    id: "virtualmachinerestores",
+    path: "/restores",
+    title: "Restores",
+    subtitle: "Restore VMs from KubeVirt snapshots",
+    listPath: "/apis/snapshot.kubevirt.io/v1beta1/virtualmachinerestores",
+    namespaced: true,
+    resourcePath: "/apis/snapshot.kubevirt.io/v1beta1",
+    kind: "VirtualMachineRestore",
+    createFields: [
+      ...namespaceNameFields("example-restore"),
+      { name: "targetVm", label: "Target VM", defaultValue: "example-vm", required: true },
+      { name: "snapshotName", label: "Snapshot Name", defaultValue: "example-snapshot", required: true },
+    ],
+    buildCreateResource: (values) => ({
+      apiVersion: "snapshot.kubevirt.io/v1beta1",
+      kind: "VirtualMachineRestore",
+      metadata: { name: stringValue(values.name, "example-restore"), namespace: stringValue(values.namespace, "default") },
+      spec: {
+        target: { apiGroup: "kubevirt.io", kind: "VirtualMachine", name: stringValue(values.targetVm, "example-vm") },
+        virtualMachineSnapshotName: stringValue(values.snapshotName, "example-snapshot"),
+      },
+    }),
+    detailSections: (r) => {
+      const spec = getRecord(r.spec);
+      const status = getRecord(r.status);
+      return [{
+        title: "Restore",
+        items: [
+          { label: "Snapshot", value: spec.virtualMachineSnapshotName },
+          { label: "Target Kind", value: getRecord(spec.target).kind },
+          { label: "Target VM", value: getRecord(spec.target).name },
+          { label: "Complete", value: status.complete },
+          { label: "Restore Time", value: status.restoreTime },
+        ],
+      }];
+    },
+    statusPath: ["status", "complete"],
+    extraColumns: [
+      { label: "Target VM", value: (r) => String(((r.spec?.target as Record<string, unknown> | undefined)?.name as string | undefined) || "N/A") },
+    ],
+    createTemplate: `apiVersion: snapshot.kubevirt.io/v1beta1
+kind: VirtualMachineRestore
+metadata:
+  name: example-restore
+  namespace: default
+spec:
+  target:
+    apiGroup: kubevirt.io
+    kind: VirtualMachine
+    name: example-vm
+  virtualMachineSnapshotName: example-snapshot
+`,
+  },
+  secrets: {
+    id: "secrets",
+    path: "/ssh-keys",
+    title: "SSH Keys",
+    subtitle: "Manage Secret resources used for SSH access",
+    listPath: "/api/v1/secrets?labelSelector=kubevirt-manager.io/managed%3Dtrue,kubevirt-manager.io/ssh%3Dtrue",
+    namespaced: true,
+    resourcePath: "/api/v1",
+    kind: "Secret",
+    createFields: [
+      ...namespaceNameFields("example-ssh-key"),
+      { name: "key", label: "SSH Public Key", type: "textarea", defaultValue: "ssh-rsa AAAA..." },
+    ],
+    buildCreateResource: (values) => ({
+      apiVersion: "v1",
+      kind: "Secret",
+      metadata: {
+        name: stringValue(values.name, "example-ssh-key"),
+        namespace: stringValue(values.namespace, "default"),
+        labels: { "kubevirt-manager.io/managed": "true", "kubevirt-manager.io/ssh": "true" },
+      },
+      type: "Opaque",
+      stringData: { key: stringValue(values.key, "ssh-rsa AAAA...") },
+    }),
+    statusPath: ["type"],
+    detailSections: (r) => [{
+      title: "Secret",
+      items: [
+        { label: "Type", value: r.type },
+        { label: "Keys", value: Object.keys(getRecord(r.data)) },
+        { label: "String Data Keys", value: Object.keys(getRecord(r.stringData)) },
+      ],
+    }],
+    extraColumns: [
+      { label: "Type", value: (r) => String((r as unknown as { type?: string }).type || "Opaque") },
+    ],
+    createTemplate: `apiVersion: v1
+kind: Secret
+metadata:
+  name: example-ssh-key
+  namespace: default
+  labels:
+    kubevirt-manager.io/managed: "true"
+    kubevirt-manager.io/ssh: "true"
+type: Opaque
+stringData:
+  key: ssh-rsa AAAA...
+`,
+  },
+  networkpolicies: {
+    id: "networkpolicies",
+    path: "/firewalls",
+    title: "Firewalls",
+    subtitle: "Manage Kubernetes NetworkPolicy firewall rules",
+    listPath: "/apis/networking.k8s.io/v1/networkpolicies",
+    namespaced: true,
+    resourcePath: "/apis/networking.k8s.io/v1",
+    kind: "NetworkPolicy",
+    actions: networkPolicyActions,
+    createFields: [
+      ...namespaceNameFields("example-vm-policy"),
+      { name: "selectorKey", label: "Pod Selector Key", defaultValue: "kubevirt.io/domain" },
+      { name: "selectorValue", label: "Pod Selector Value", defaultValue: "example-vm" },
+      { name: "policyType", label: "Policy Type", type: "select", defaultValue: "Ingress", options: [{ label: "Ingress", value: "Ingress" }, { label: "Egress", value: "Egress" }, { label: "Ingress and Egress", value: "Both" }] },
+    ],
+    buildCreateResource: (values) => {
+      const policyType = stringValue(values.policyType, "Ingress");
+      return {
+        apiVersion: "networking.k8s.io/v1",
+        kind: "NetworkPolicy",
+        metadata: { name: stringValue(values.name, "example-vm-policy"), namespace: stringValue(values.namespace, "default") },
+        spec: {
+          podSelector: { matchLabels: { [stringValue(values.selectorKey, "kubevirt.io/domain")]: stringValue(values.selectorValue, "example-vm") } },
+          policyTypes: policyType === "Both" ? ["Ingress", "Egress"] : [policyType],
+        },
+      };
+    },
+    detailSections: (r) => {
+      const spec = getRecord(r.spec);
+      return [{
+        title: "Policy",
+        items: [
+          { label: "Pod Selector", value: selectorText(getRecord(spec.podSelector).matchLabels) },
+          { label: "Policy Types", value: spec.policyTypes },
+          { label: "Ingress Rules", value: Array.isArray(spec.ingress) ? spec.ingress.length : 0 },
+          { label: "Egress Rules", value: Array.isArray(spec.egress) ? spec.egress.length : 0 },
+        ],
+      }];
+    },
+    extraColumns: [
+      { label: "Policy Types", value: (r) => ((r.spec?.policyTypes as string[] | undefined) || []).join(", ") || "N/A" },
+    ],
+    createTemplate: `apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: example-vm-policy
+  namespace: default
+spec:
+  podSelector:
+    matchLabels:
+      kubevirt.io/domain: example-vm
+  policyTypes:
+    - Ingress
+`,
+  },
+  horizontalpodautoscalers: {
+    id: "horizontalpodautoscalers",
+    path: "/autoscaling",
+    title: "Autoscaling",
+    subtitle: "Manage autoscaling policies for VM pools and related workloads",
+    listPath: "/apis/autoscaling/v2/horizontalpodautoscalers",
+    namespaced: true,
+    resourcePath: "/apis/autoscaling/v2",
+    kind: "HorizontalPodAutoscaler",
+    actions: hpaActions,
+    createFields: [
+      ...namespaceNameFields("example-hpa"),
+      { name: "targetKind", label: "Target Kind", type: "select", defaultValue: "VirtualMachinePool", options: [{ label: "VirtualMachinePool", value: "VirtualMachinePool" }, { label: "Deployment", value: "Deployment" }] },
+      { name: "targetName", label: "Target Name", defaultValue: "example-pool" },
+      { name: "minReplicas", label: "Min Replicas", type: "number", defaultValue: "1" },
+      { name: "maxReplicas", label: "Max Replicas", type: "number", defaultValue: "3" },
+      { name: "cpu", label: "CPU Utilization", type: "number", defaultValue: "80" },
+    ],
+    buildCreateResource: (values) => {
+      const targetKind = stringValue(values.targetKind, "VirtualMachinePool");
+      return {
+        apiVersion: "autoscaling/v2",
+        kind: "HorizontalPodAutoscaler",
+        metadata: { name: stringValue(values.name, "example-hpa"), namespace: stringValue(values.namespace, "default"), labels: { "kubevirt-manager.io/managed": "true" } },
+        spec: {
+          minReplicas: numberValue(values.minReplicas, 1),
+          maxReplicas: numberValue(values.maxReplicas, 3),
+          scaleTargetRef: {
+            apiVersion: targetKind === "Deployment" ? "apps/v1" : "pool.kubevirt.io/v1alpha1",
+            kind: targetKind,
+            name: stringValue(values.targetName, "example-pool"),
+          },
+          metrics: [{ type: "Resource", resource: { name: "cpu", target: { type: "Utilization", averageUtilization: numberValue(values.cpu, 80) } } }],
+        },
+      };
+    },
+    detailSections: (r) => {
+      const spec = getRecord(r.spec);
+      const status = getRecord(r.status);
+      return [
+        {
+          title: "Scale Target",
+          items: [
+            { label: "Target API Version", value: getRecord(spec.scaleTargetRef).apiVersion },
+            { label: "Target Kind", value: getRecord(spec.scaleTargetRef).kind },
+            { label: "Target Name", value: getRecord(spec.scaleTargetRef).name },
+          ],
+        },
+        {
+          title: "Replicas",
+          items: [
+            { label: "Min", value: spec.minReplicas },
+            { label: "Max", value: spec.maxReplicas },
+            { label: "Current", value: status.currentReplicas },
+            { label: "Desired", value: status.desiredReplicas },
+          ],
+        },
+      ];
+    },
+    statusPath: ["status", "currentReplicas"],
+    extraColumns: [
+      { label: "Min", value: (r) => String((r.spec?.minReplicas as number | undefined) ?? "N/A") },
+      { label: "Max", value: (r) => String((r.spec?.maxReplicas as number | undefined) ?? "N/A") },
+    ],
+    createTemplate: `apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: example-hpa
+  namespace: default
+spec:
+  minReplicas: 1
+  maxReplicas: 3
+  scaleTargetRef:
+    apiVersion: pool.kubevirt.io/v1alpha1
+    kind: VirtualMachinePool
+    name: example-pool
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 80
+`,
+  },
+  clusters: {
+    id: "clusters",
+    path: "/clusters",
+    title: "Kubernetes Clusters",
+    subtitle: "Manage Cluster API clusters backed by KubeVirt",
+    listPath: "/apis/cluster.x-k8s.io/v1beta1/clusters",
+    namespaced: true,
+    resourcePath: "/apis/cluster.x-k8s.io/v1beta1",
+    kind: "Cluster",
+    createFields: [
+      ...namespaceNameFields("example-cluster"),
+      { name: "kubernetesVersion", label: "Kubernetes Version", defaultValue: "v1.30.0" },
+      { name: "controlPlaneReplicas", label: "Control Plane Replicas", type: "number", defaultValue: "1" },
+      { name: "workerReplicas", label: "Worker Replicas", type: "number", defaultValue: "2" },
+      { name: "serviceType", label: "Control Plane Service Type", type: "select", defaultValue: "LoadBalancer", options: [{ label: "LoadBalancer", value: "LoadBalancer" }, { label: "ClusterIP", value: "ClusterIP" }, { label: "NodePort", value: "NodePort" }] },
+      { name: "podCidr", label: "Pod CIDR", defaultValue: "192.168.0.0/16" },
+      { name: "serviceCidr", label: "Service CIDR", defaultValue: "10.96.0.0/12" },
+      { name: "serviceDomain", label: "Service Domain", defaultValue: "cluster.local" },
+      { name: "instanceType", label: "Cluster Instance Type", defaultValue: "example-small" },
+      { name: "containerImage", label: "Node Container Disk Image", defaultValue: "quay.io/containerdisks/fedora:latest" },
+      { name: "memory", label: "Fallback Memory", defaultValue: "2Gi" },
+    ],
+    buildCreateResource: (values) => {
+      const name = stringValue(values.name, "example-cluster");
+      const namespace = stringValue(values.namespace, "default");
+      const labels = { "kubevirt-manager.io/managed": "true", "cluster.x-k8s.io/cluster-name": name };
+      const cpTemplate = `${name}-control-plane`;
+      const workerTemplate = `${name}-worker`;
+      const workerPool = `${name}-md-0`;
+      const version = stringValue(values.kubernetesVersion, "v1.30.0");
+      const podCidr = stringValue(values.podCidr, "192.168.0.0/16");
+      const serviceCidr = stringValue(values.serviceCidr, "10.96.0.0/12");
+      const instanceType = stringValue(values.instanceType);
+      const vmTemplateSpec = (role: string) => ({
+        metadata: { namespace, labels: { ...labels, "cluster.x-k8s.io/role": role } },
+        spec: {
+          runStrategy: "Once",
+          ...(instanceType ? { instancetype: { kind: "VirtualMachineClusterInstancetype", name: instanceType } } : {}),
+          template: {
+            metadata: { labels: { ...labels, "cluster.x-k8s.io/role": role } },
+            spec: {
+              domain: {
+                resources: { requests: { memory: stringValue(values.memory, "2Gi") } },
+                devices: {
+                  disks: [{ name: "containerdisk", disk: { bus: "virtio" } }],
+                  interfaces: [{ name: "default", masquerade: {} }],
+                  networkInterfaceMultiqueue: true,
+                },
+              },
+              networks: [{ name: "default", pod: {} }],
+              volumes: [{ name: "containerdisk", containerDisk: { image: stringValue(values.containerImage, "quay.io/containerdisks/fedora:latest") } }],
+            },
+          },
+        },
+      });
+      return [
+        {
+        apiVersion: "cluster.x-k8s.io/v1beta1",
+        kind: "Cluster",
+        metadata: { name, namespace, labels },
+        spec: {
+          clusterNetwork: {
+            pods: { cidrBlocks: [podCidr] },
+            services: { cidrBlocks: [serviceCidr] },
+            serviceDomain: stringValue(values.serviceDomain, "cluster.local"),
+          },
+          controlPlaneRef: { apiVersion: "controlplane.cluster.x-k8s.io/v1beta1", kind: "KubeadmControlPlane", name, namespace },
+          infrastructureRef: { apiVersion: "infrastructure.cluster.x-k8s.io/v1alpha1", kind: "KubevirtCluster", name, namespace },
+        },
+        },
+        {
+          apiVersion: "infrastructure.cluster.x-k8s.io/v1alpha1",
+          kind: "KubevirtCluster",
+          metadata: { name, namespace, labels },
+          spec: {
+            controlPlaneServiceTemplate: {
+              metadata: { labels, annotations: {} },
+              spec: { type: stringValue(values.serviceType, "LoadBalancer"), externalTrafficPolicy: "Cluster" },
+            },
+          },
+        },
+        {
+          apiVersion: "infrastructure.cluster.x-k8s.io/v1alpha1",
+          kind: "KubevirtMachineTemplate",
+          metadata: { name: cpTemplate, namespace, labels: { ...labels, "cluster.x-k8s.io/role": "control-plane" } },
+          spec: { template: { spec: { virtualMachineTemplate: vmTemplateSpec("control-plane") } } },
+        },
+        {
+          apiVersion: "controlplane.cluster.x-k8s.io/v1beta1",
+          kind: "KubeadmControlPlane",
+          metadata: { name, namespace, labels },
+          spec: {
+            replicas: numberValue(values.controlPlaneReplicas, 1),
+            version,
+            machineTemplate: { infrastructureRef: { apiVersion: "infrastructure.cluster.x-k8s.io/v1alpha1", kind: "KubevirtMachineTemplate", name: cpTemplate, namespace } },
+            kubeadmConfigSpec: {
+              clusterConfiguration: { networking: { dnsDomain: stringValue(values.serviceDomain, "cluster.local"), podSubnet: podCidr, serviceSubnet: serviceCidr } },
+              initConfiguration: { nodeRegistration: { criSocket: "/var/run/containerd/containerd.sock" } },
+              joinConfiguration: { nodeRegistration: { criSocket: "/var/run/containerd/containerd.sock" } },
+              useExperimentalRetryJoin: true,
+              format: "cloud-config",
+            },
+          },
+        },
+        {
+          apiVersion: "infrastructure.cluster.x-k8s.io/v1alpha1",
+          kind: "KubevirtMachineTemplate",
+          metadata: { name: workerTemplate, namespace, labels: { ...labels, "cluster.x-k8s.io/role": "worker" } },
+          spec: { template: { spec: { virtualMachineTemplate: vmTemplateSpec("worker") } } },
+        },
+        {
+          apiVersion: "bootstrap.cluster.x-k8s.io/v1beta1",
+          kind: "KubeadmConfigTemplate",
+          metadata: { name: workerPool, namespace, labels },
+          spec: { template: { spec: { joinConfiguration: { nodeRegistration: { kubeletExtraArgs: {} } }, useExperimentalRetryJoin: true, format: "cloud-config" } } },
+        },
+        {
+          apiVersion: "cluster.x-k8s.io/v1beta1",
+          kind: "MachineDeployment",
+          metadata: { name: workerPool, namespace, labels },
+          spec: {
+            clusterName: name,
+            replicas: numberValue(values.workerReplicas, 2),
+            selector: {},
+            template: {
+              metadata: { labels },
+              spec: {
+                clusterName: name,
+                version,
+                bootstrap: { configRef: { apiVersion: "bootstrap.cluster.x-k8s.io/v1beta1", kind: "KubeadmConfigTemplate", name: workerPool, namespace } },
+                infrastructureRef: { apiVersion: "infrastructure.cluster.x-k8s.io/v1alpha1", kind: "KubevirtMachineTemplate", name: workerTemplate, namespace },
+              },
+            },
+          },
+        },
+        {
+          apiVersion: "cluster.x-k8s.io/v1beta1",
+          kind: "MachineHealthCheck",
+          metadata: { name: `${workerPool}-mhc`, namespace, labels },
+          spec: {
+            clusterName: name,
+            maxUnhealthy: "40%",
+            nodeStartupTimeout: "10m",
+            selector: { matchLabels: labels },
+            unhealthyConditions: [
+              { type: "Ready", status: "False", timeout: "5m" },
+              { type: "Ready", status: "Unknown", timeout: "5m" },
+            ],
+          },
+        },
+      ];
+    },
+    createResourcePath: createPathByKind,
+    detailSections: (r) => {
+      const spec = getRecord(r.spec);
+      const status = getRecord(r.status);
+      const network = getRecord(spec.clusterNetwork);
+      return [
+        {
+          title: "Cluster API",
+          items: [
+            { label: "Phase", value: status.phase },
+            { label: "Control Plane Ready", value: status.controlPlaneReady },
+            { label: "Infrastructure Ready", value: status.infrastructureReady },
+            { label: "Failure Reason", value: status.failureReason },
+          ],
+        },
+        {
+          title: "References",
+          items: [
+            { label: "Control Plane", value: getRecord(spec.controlPlaneRef).name },
+            { label: "Infrastructure", value: getRecord(spec.infrastructureRef).name },
+          ],
+        },
+        {
+          title: "Network",
+          items: [
+            { label: "Pod CIDRs", value: getRecord(network.pods).cidrBlocks },
+            { label: "Service CIDRs", value: getRecord(network.services).cidrBlocks },
+            { label: "Service Domain", value: network.serviceDomain },
+          ],
+        },
+      ];
+    },
+    statusPath: ["status", "phase"],
+    extraColumns: [
+      { label: "Infrastructure", value: (r) => String(((r.spec?.infrastructureRef as Record<string, unknown> | undefined)?.name as string | undefined) || "N/A") },
+    ],
+    createTemplate: `apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: example-cluster
+  namespace: default
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+        - 192.168.0.0/16
+    services:
+      cidrBlocks:
+        - 10.96.0.0/12
+`,
+  },
+  images: {
+    id: "images",
+    path: "/images",
+    title: "Images",
+    subtitle: "Manage kubevirt-manager Image resources used as VM disk sources",
+    listPath: "/apis/kubevirt-manager.io/v1/images",
+    namespaced: true,
+    resourcePath: "/apis/kubevirt-manager.io/v1",
+    kind: "Image",
+    actions: imageActions,
+    createFields: [
+      ...namespaceNameFields("fedora-image"),
+      { name: "type", label: "Image Type", type: "select", defaultValue: "http", options: [{ label: "HTTP", value: "http" }, { label: "GCS", value: "gcs" }, { label: "S3", value: "s3" }, { label: "Registry", value: "registry" }, { label: "PVC", value: "pvc" }] },
+      { name: "readableName", label: "Readable Name", defaultValue: "Fedora" },
+      { name: "readableDescription", label: "Description", defaultValue: "" },
+      { name: "credentials", label: "Credentials Secret", defaultValue: "", placeholder: "optional" },
+      { name: "value", label: "Source URL / PVC Name", defaultValue: "https://example.com/image.qcow2.gz" },
+    ],
+    buildCreateResource: (values) => {
+      const type = stringValue(values.type, "http");
+      const value = stringValue(values.value);
+      return {
+        apiVersion: "kubevirt-manager.io/v1",
+        kind: "Image",
+        metadata: { name: stringValue(values.name, "fedora-image"), namespace: stringValue(values.namespace, "default") },
+        spec: {
+          type,
+          readableName: stringValue(values.readableName, stringValue(values.name, "fedora-image")),
+          ...(stringValue(values.readableDescription) ? { readableDescription: stringValue(values.readableDescription) } : {}),
+          ...(stringValue(values.credentials) ? { credentials: stringValue(values.credentials) } : {}),
+          ...(type === "pvc" ? { pvc: { name: value, namespace: stringValue(values.namespace, "default") } } : { [type]: { url: value } }),
+        },
+      };
+    },
+    statusPath: ["spec", "type"],
+    detailSections: (r) => {
+      const spec = getRecord(r.spec);
+      return [{
+        title: "Image",
+        items: [
+          { label: "Type", value: spec.type },
+          { label: "Readable Name", value: spec.readableName },
+          { label: "Description", value: spec.readableDescription },
+          { label: "Credentials Secret", value: spec.credentials },
+          { label: "HTTP", value: spec.http },
+          { label: "GCS", value: spec.gcs },
+          { label: "S3", value: spec.s3 },
+          { label: "Registry", value: spec.registry },
+          { label: "PVC", value: spec.pvc },
+        ],
+      }];
+    },
+    extraColumns: [
+      { label: "Type", value: (r) => String(getRecord(r.spec).type || "N/A") },
+      { label: "Readable Name", value: (r) => String(getRecord(r.spec).readableName || "N/A") },
+    ],
+    createTemplate: `apiVersion: kubevirt-manager.io/v1
+kind: Image
+metadata:
+  name: fedora-image
+  namespace: default
+spec:
+  type: http
+  readableName: Fedora
+  http:
+    url: https://example.com/image.qcow2.gz
+`,
+  },
+}
+
 // --- Types ---
 interface ResourceMetadata { name: string; namespace: string; uid: string; creationTimestamp: string; labels?: Record<string, string>; annotations?: Record<string, string>; }
 interface VM { metadata: ResourceMetadata; spec: { running?: boolean; runStrategy?: string; template?: { metadata?: { labels?: Record<string, string>; annotations?: Record<string, string>; }; spec?: { architecture?: string; domain?: { machine?: { type?: string }; cpu?: { cores?: number, sockets?: number, threads?: number }; resources?: { requests?: { cpu?: string, memory?: string } }; devices?: { interfaces?: Array<{ name: string, model?: string }> }; }; networks?: Array<{ name: string, pod?: any }>; volumes?: Array<{ name: string, dataVolume?: { name: string } }>; }; }; }; status?: { printableStatus?: string; conditions?: Array<{ type: string; status: string; message?: string; reason?: string }>; }; }
 interface VMI { metadata: ResourceMetadata; status: { phase: string; interfaces?: Array<{ ipAddress?: string; name: string }>; nodeName?: string }; }
-interface DV { metadata: ResourceMetadata; status?: { phase: string; progress?: string; conditions?: Array<{ type: string; status: string; message?: string; reason?: string }>; }; spec: { storage?: { resources?: { requests?: { storage?: string } } }; pvc?: { resources?: { requests?: { storage?: string } } }; source?: Record<string, any>; }; }
+interface DV { metadata: ResourceMetadata; status?: { phase: string; progress?: string; claimName?: string; conditions?: Array<{ type: string; status: string; message?: string; reason?: string }>; }; spec: { storage?: { resources?: { requests?: { storage?: string } } }; pvc?: { resources?: { requests?: { storage?: string } } }; source?: Record<string, any>; }; }
 interface K8sNode { metadata: ResourceMetadata; status: { capacity: Record<string, string>; allocatable: Record<string, string>; conditions: Array<{ type: string; status: string }>; }; spec: { unschedulable?: boolean }; }
 interface K8sPod { metadata: ResourceMetadata; status: { phase: string; containerStatuses?: Array<{ ready: boolean; restartCount: number }>; }; }
 interface K8sEvent { metadata: ResourceMetadata; involvedObject: { kind: string; name: string; namespace: string; uid: string; }; reason: string; message: string; type: string; lastTimestamp: string; count: number; }
@@ -64,7 +1423,7 @@ function CopyableText({ text, label }: { text: string, label?: string }) {
   const onCopy = () => { navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 2000); };
   return (
     <div className="group relative flex flex-col gap-1 w-full bg-muted/30 p-2.5 rounded-lg border hover:border-border transition-all">
-      {label && <div className="text-[9px] font-medium text-muted-foreground uppercase tracking-widest">{label}</div>}
+      {label && <div className="text-[9px] font-medium text-muted-foreground">{label}</div>}
       <div className="flex items-start justify-between gap-4">
         <div className="text-[11px] font-mono text-foreground break-all leading-relaxed flex-1">{text}</div>
         <button onClick={onCopy} className="p-1 hover:bg-background rounded-lg border border-transparent hover:border-border transition-all text-muted-foreground hover:text-foreground shrink-0 mt-0.5">
@@ -72,6 +1431,94 @@ function CopyableText({ text, label }: { text: string, label?: string }) {
         </button>
       </div>
     </div>
+  );
+}
+
+type VmDialogField = {
+  name: string;
+  label: string;
+  type?: "text" | "number" | "select";
+  defaultValue: string;
+  options?: Array<{ label: string; value: string }>;
+};
+
+function VmActionDialog({
+  label,
+  description,
+  fields,
+  buildRequest,
+  onDone,
+}: {
+  label: string;
+  description: string;
+  fields: VmDialogField[];
+  buildRequest: (values: Record<string, string>) => { url: string; options: RequestInit };
+  onDone: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [values, setValues] = useState<Record<string, string>>(() => Object.fromEntries(fields.map((field) => [field.name, field.defaultValue])));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (open) setValues(Object.fromEntries(fields.map((field) => [field.name, field.defaultValue])));
+  }, [open]);
+
+  const submit = async () => {
+    setSaving(true);
+    setError("");
+    try {
+      const request = buildRequest(values);
+      const res = await apiFetch(request.url, request.options);
+      if (!res.ok) throw new Error(await res.text());
+      setOpen(false);
+      onDone();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : `Failed to ${label.toLowerCase()}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button size="sm" variant="outline">{label}</Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{label}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          {fields.map((field) => (
+            <label key={field.name} className="flex flex-col gap-1.5">
+              <span className="text-sm font-medium text-foreground">{field.label}</span>
+              {field.type === "select" ? (
+                <select
+                  value={values[field.name] || ""}
+                  onChange={(event) => setValues((current) => ({ ...current, [field.name]: event.target.value }))}
+                  className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-ring"
+                >
+                  {(field.options || []).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              ) : (
+                <Input
+                  type={field.type === "number" ? "number" : "text"}
+                  value={values[field.name] || ""}
+                  onChange={(event) => setValues((current) => ({ ...current, [field.name]: event.target.value }))}
+                />
+              )}
+            </label>
+          ))}
+        </div>
+        {error && <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-foreground">{error}</div>}
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+          <Button onClick={submit} disabled={saving}>{saving ? "Applying..." : "Apply"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -88,7 +1535,10 @@ function VMList() {
           <h1 className="text-2xl font-bold">Virtual Machines</h1>
           <p className="text-sm text-muted-foreground">Manage your virtual machine workloads</p>
         </div>
-        <div className="text-sm text-muted-foreground bg-muted px-3 py-1.5 rounded-lg border">{vms.length} total</div>
+        <div className="flex items-center gap-2">
+          <ResourceCreateDialog config={vmCreateConfig} onCreated={fetchVms} />
+          <div className="text-sm text-muted-foreground bg-muted px-3 py-1.5 rounded-lg border">{vms.length} total</div>
+        </div>
       </div>
       <div className="flex flex-wrap gap-3">
         <div className="relative flex-1 min-w-[200px]">
@@ -151,13 +1601,17 @@ function VMList() {
 
 function DVList() {
   const [dvs, setDvs] = useState<DV[]>([]); const [loading, setLoading] = useState(true); const [searchTerm, setSearchTerm] = useState("");
-  useEffect(() => { apiFetch("/apis/cdi.kubevirt.io/v1beta1/datavolumes").then(r => r.json()).then(data => { setDvs(data.items || []); setLoading(false); }); }, []);
+  const loadDvs = async () => { setLoading(true); try { const data = await apiFetch("/apis/cdi.kubevirt.io/v1beta1/datavolumes").then(r => r.json()); setDvs(data.items || []); } finally { setLoading(false); } };
+  useEffect(() => { loadDvs(); }, []);
   const filtered = dvs.filter(dv => dv.metadata.name.toLowerCase().includes(searchTerm.toLowerCase()));
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-bold">Storage</h1>
-        <p className="text-sm text-muted-foreground">Manage your DataVolume storage resources</p>
+      <div className="flex justify-between items-end">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-2xl font-bold">Storage</h1>
+          <p className="text-sm text-muted-foreground">Manage your DataVolume storage resources</p>
+        </div>
+        <ResourceCreateDialog config={dvCreateConfig} onCreated={loadDvs} />
       </div>
       <div className="flex flex-wrap gap-3">
         <div className="relative flex-1 min-w-[200px]">
@@ -375,7 +1829,28 @@ function VMDetailContent() {
     } finally { setLoading(false); }
   };
   useEffect(() => { fetchData(); const t = setInterval(fetchData, 5000); return () => clearInterval(t); }, [namespace, name]);
-  const handleAction = async (a:string) => { await apiFetch(`/apis/subresources.kubevirt.io/v1/namespaces/${namespace}/virtualmachines/${name}/${a}`, { method: 'PUT', body: '{}' }); fetchData(); };
+  const handleAction = async (a:string) => {
+    if (a === "pause" || a === "unpause") {
+      await apiFetch(`/apis/subresources.kubevirt.io/v1/namespaces/${namespace}/virtualmachineinstances/${name}/${a}`, jsonPut());
+    } else if (a === "poweroff") {
+      await apiFetch(`/apis/kubevirt.io/v1/namespaces/${namespace}/virtualmachineinstances/${name}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ gracePeriodSeconds: 0 }),
+      });
+    } else if (a === "migrate") {
+      await apiFetch(`/apis/kubevirt.io/v1/namespaces/${namespace}/virtualmachineinstancemigrations`, jsonPost({
+        apiVersion: "kubevirt.io/v1",
+        kind: "VirtualMachineInstanceMigration",
+        metadata: { generateName: `${name}-migration-`, namespace },
+        spec: { vmiName: name },
+      }));
+    } else {
+      await apiFetch(`/apis/subresources.kubevirt.io/v1/namespaces/${namespace}/virtualmachines/${name}/${a}`, jsonPut());
+    }
+    fetchData();
+  };
+  const vmPatchUrl = `/apis/kubevirt.io/v1/namespaces/${namespace}/virtualmachines/${name}`;
 
   if (loading && !vm) return (
     <div className="flex items-center justify-center h-64 gap-2">
@@ -388,6 +1863,8 @@ function VMDetailContent() {
       Virtual machine not found
     </div>
   );
+  const currentCpu = vm.spec.template?.spec?.domain?.cpu || {};
+  const currentMemory = vm.spec.template?.spec?.domain?.resources?.requests?.memory || "1Gi";
 
   const tabs = [
     { id: "overview", name: "Overview", icon: Info },
@@ -411,10 +1888,98 @@ function VMDetailContent() {
           </div>
           <p className="text-sm text-muted-foreground">{vm.metadata.namespace}</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap justify-end gap-2">
           <Button size="sm" onClick={() => handleAction('start')}>Start</Button>
           <Button size="sm" variant="outline" onClick={() => handleAction('stop')}>Stop</Button>
           <Button size="sm" variant="outline" onClick={() => handleAction('restart')}>Restart</Button>
+          <Button size="sm" variant="outline" onClick={() => handleAction('pause')}>Pause</Button>
+          <Button size="sm" variant="outline" onClick={() => handleAction('unpause')}>Resume</Button>
+          <Button size="sm" variant="outline" onClick={() => handleAction('migrate')}>Migrate</Button>
+          <Button size="sm" variant="outline" onClick={() => handleAction('poweroff')}>Power Off</Button>
+          <VmActionDialog
+            label="Resize"
+            description="Patch CPU sockets, cores, threads, and requested memory on this VM template."
+            fields={[
+              { name: "sockets", label: "Sockets", type: "number", defaultValue: String(currentCpu.sockets || 1) },
+              { name: "cores", label: "Cores", type: "number", defaultValue: String(currentCpu.cores || 1) },
+              { name: "threads", label: "Threads", type: "number", defaultValue: String(currentCpu.threads || 1) },
+              { name: "memory", label: "Memory", defaultValue: currentMemory },
+            ]}
+            buildRequest={(values) => ({
+              url: vmPatchUrl,
+              options: mergePatch({
+                spec: {
+                  template: {
+                    spec: {
+                      domain: {
+                        cpu: {
+                          sockets: numberValue(values.sockets, 1),
+                          cores: numberValue(values.cores, 1),
+                          threads: numberValue(values.threads, 1),
+                        },
+                        resources: { requests: { memory: stringValue(values.memory, "1Gi") } },
+                      },
+                    },
+                  },
+                },
+              }),
+            })}
+            onDone={fetchData}
+          />
+          <VmActionDialog
+            label="Run Strategy"
+            description="Patch spec.runStrategy on this VirtualMachine."
+            fields={[{ name: "runStrategy", label: "Run Strategy", type: "select", defaultValue: vm.spec.runStrategy || "Halted", options: [{ label: "Always", value: "Always" }, { label: "Halted", value: "Halted" }, { label: "Manual", value: "Manual" }] }]}
+            buildRequest={(values) => ({ url: vmPatchUrl, options: mergePatch({ spec: { runStrategy: stringValue(values.runStrategy, "Halted") } }) })}
+            onDone={fetchData}
+          />
+          <VmActionDialog
+            label="Instance Type"
+            description="Patch spec.instancetype.name on this VirtualMachine."
+            fields={[{ name: "instanceType", label: "Cluster Instance Type", defaultValue: String((vm.spec as any).instancetype?.name || "") }]}
+            buildRequest={(values) => ({ url: vmPatchUrl, options: mergePatch({ spec: { instancetype: { name: stringValue(values.instanceType) } } }) })}
+            onDone={fetchData}
+          />
+          <VmActionDialog
+            label="Priority Class"
+            description="Patch template priorityClassName on this VirtualMachine."
+            fields={[{ name: "priorityClassName", label: "Priority Class Name", defaultValue: String((vm.spec.template?.spec as any)?.priorityClassName || "") }]}
+            buildRequest={(values) => ({ url: vmPatchUrl, options: mergePatch({ spec: { template: { spec: { priorityClassName: stringValue(values.priorityClassName) } } } }) })}
+            onDone={fetchData}
+          />
+          <VmActionDialog
+            label="Hotplug Volume"
+            description="Attach an existing DataVolume to the running VMI."
+            fields={[
+              { name: "volume", label: "DataVolume Name", defaultValue: "" },
+              { name: "type", label: "Device Type", type: "select", defaultValue: "disk", options: [{ label: "Disk", value: "disk" }, { label: "CD-ROM", value: "cdrom" }, { label: "LUN", value: "lun" }] },
+              { name: "cache", label: "Cache Mode", type: "select", defaultValue: "none", options: [{ label: "none", value: "none" }, { label: "writeback", value: "writeback" }, { label: "writethrough", value: "writethrough" }] },
+              { name: "readonly", label: "Read Only", type: "select", defaultValue: "false", options: [{ label: "No", value: "false" }, { label: "Yes", value: "true" }] },
+            ]}
+            buildRequest={(values) => {
+              const volume = stringValue(values.volume);
+              const readonly = values.readonly === "true";
+              const disk: Record<string, unknown> = { name: volume, serial: volume, cache: stringValue(values.cache, "none") };
+              if (values.type === "cdrom") disk.cdrom = { readonly };
+              else if (values.type === "lun") disk.lun = { readonly, bus: "scsi" };
+              else disk.disk = { readonly, bus: "scsi" };
+              return {
+                url: `/apis/subresources.kubevirt.io/v1/namespaces/${namespace}/virtualmachineinstances/${name}/addvolume`,
+                options: jsonPut({ name: volume, disk, volumeSource: { dataVolume: { name: volume, hotpluggable: true } } }),
+              };
+            }}
+            onDone={fetchData}
+          />
+          <VmActionDialog
+            label="Unplug Volume"
+            description="Detach a hotplugged volume from the running VMI."
+            fields={[{ name: "volume", label: "Volume Name", defaultValue: "" }]}
+            buildRequest={(values) => ({
+              url: `/apis/subresources.kubevirt.io/v1/namespaces/${namespace}/virtualmachineinstances/${name}/removevolume`,
+              options: jsonPut({ name: stringValue(values.volume) }),
+            })}
+            onDone={fetchData}
+          />
         </div>
       </div>
 
@@ -514,15 +2079,15 @@ function VMDetailContent() {
                         <AreaChart data={metrics}>
                           <defs>
                             <linearGradient id="colorCpu" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.1} />
-                              <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0} />
+                              <stop offset="5%" stopColor="var(--primary)" stopOpacity={0.1} />
+                              <stop offset="95%" stopColor="var(--primary)" stopOpacity={0} />
                             </linearGradient>
                           </defs>
                           <CartesianGrid strokeDasharray="3 3" vertical={false} className="stroke-muted" />
                           <XAxis dataKey="time" hide />
                           <YAxis fontSize={10} tickLine={false} axisLine={false} tickFormatter={(v) => `${v.toFixed(2)}`} />
-                          <Tooltip contentStyle={{ borderRadius: '8px', border: '1px solid hsl(var(--border))', fontSize: '11px' }} />
-                          <Area type="monotone" dataKey="cpuUsage" stroke="hsl(var(--primary))" fill="url(#colorCpu)" animationDuration={300} />
+                          <Tooltip contentStyle={{ borderRadius: '8px', border: '1px solid var(--border)', fontSize: '11px' }} />
+                          <Area type="monotone" dataKey="cpuUsage" stroke="var(--primary)" fill="url(#colorCpu)" animationDuration={300} />
                         </AreaChart>
                       </ResponsiveContainer>
                     </div>
@@ -542,15 +2107,15 @@ function VMDetailContent() {
                         <AreaChart data={metrics}>
                           <defs>
                             <linearGradient id="colorMem" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="5%" stopColor="#2563eb" stopOpacity={0.1} />
-                              <stop offset="95%" stopColor="#2563eb" stopOpacity={0} />
+                              <stop offset="5%" stopColor="var(--primary)" stopOpacity={0.1} />
+                              <stop offset="95%" stopColor="var(--primary)" stopOpacity={0} />
                             </linearGradient>
                           </defs>
                           <CartesianGrid strokeDasharray="3 3" vertical={false} className="stroke-muted" />
                           <XAxis dataKey="time" hide />
                           <YAxis fontSize={10} tickLine={false} axisLine={false} tickFormatter={(v) => `${Math.round(v)}`} />
-                          <Tooltip contentStyle={{ borderRadius: '8px', border: '1px solid hsl(var(--border))', fontSize: '11px' }} />
-                          <Area type="monotone" dataKey="memoryUsage" stroke="#2563eb" fill="url(#colorMem)" animationDuration={300} />
+                          <Tooltip contentStyle={{ borderRadius: '8px', border: '1px solid var(--border)', fontSize: '11px' }} />
+                          <Area type="monotone" dataKey="memoryUsage" stroke="var(--primary)" fill="url(#colorMem)" animationDuration={300} />
                         </AreaChart>
                       </ResponsiveContainer>
                     </div>
@@ -571,7 +2136,7 @@ function VMDetailContent() {
                 <CardContent>
                   <div className="grid md:grid-cols-2 gap-6">
                     <div className="space-y-2">
-                      <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">Labels</div>
+                      <div className="mb-2 text-xs font-medium text-muted-foreground">Labels</div>
                       <div className="flex flex-wrap gap-2">
                         {Object.entries(vm.spec.template?.metadata?.labels || {}).map(([k, v]) => (
                           <span key={k} className="px-2 py-1 bg-muted text-foreground rounded-md text-xs border">{k}: {v}</span>
@@ -579,7 +2144,7 @@ function VMDetailContent() {
                       </div>
                     </div>
                     <div className="space-y-2">
-                      <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">Annotations</div>
+                      <div className="mb-2 text-xs font-medium text-muted-foreground">Annotations</div>
                       <div className="grid grid-cols-1 gap-2">
                         {Object.entries(vm.spec.template?.metadata?.annotations || {}).slice(0, 8).map(([k, v]) => (
                           <CopyableText key={k} label={k} text={String(v)} />
@@ -670,7 +2235,7 @@ function VMDetailContent() {
         {activeTab === "yaml" && (
           <ShadCard>
             <CardContent className="p-0">
-              <pre className="p-6 text-sm font-mono text-foreground bg-muted/30 rounded-xl overflow-x-auto min-h-[400px] whitespace-pre">{vmYaml || "Fetching..."}</pre>
+              <pre className="p-6 text-sm font-mono text-foreground bg-muted/30 rounded-lg overflow-x-auto min-h-[400px] whitespace-pre">{vmYaml || "Fetching..."}</pre>
             </CardContent>
           </ShadCard>
         )}
@@ -721,6 +2286,20 @@ function DVDetailContent() {
           </div>
           <p className="text-sm text-muted-foreground">{dv.metadata.namespace}</p>
         </div>
+        <VmActionDialog
+          label="Resize"
+          description="Resize the bound PVC for this DataVolume."
+          fields={[{
+            name: "storage",
+            label: "Storage Size",
+            defaultValue: dv.spec.storage?.resources?.requests?.storage || dv.spec.pvc?.resources?.requests?.storage || "10Gi",
+          }]}
+          buildRequest={(values) => ({
+            url: `/api/v1/namespaces/${namespace}/persistentvolumeclaims/${dv.status?.claimName || name}`,
+            options: mergePatch({ spec: { resources: { requests: { storage: stringValue(values.storage, "10Gi") } } } }),
+          })}
+          onDone={() => window.location.reload()}
+        />
       </div>
 
       {/* Tab Navigation */}
@@ -779,7 +2358,7 @@ function DVDetailContent() {
               <CardContent>
                 <div className="grid md:grid-cols-2 gap-6">
                   <div className="space-y-2">
-                    <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">Labels</div>
+                    <div className="mb-2 text-xs font-medium text-muted-foreground">Labels</div>
                     <div className="flex flex-wrap gap-2">
                       {Object.entries(dv.metadata.labels || {}).map(([k, v]) => (
                         <span key={k} className="px-2 py-1 bg-muted text-foreground rounded-md text-xs border">{k}: {v}</span>
@@ -787,7 +2366,7 @@ function DVDetailContent() {
                     </div>
                   </div>
                   <div className="space-y-2">
-                    <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">Annotations</div>
+                    <div className="mb-2 text-xs font-medium text-muted-foreground">Annotations</div>
                     <div className="grid grid-cols-1 gap-2">
                       {Object.entries(dv.metadata.annotations || {}).slice(0, 12).map(([k, v]) => (
                         <CopyableText key={k} label={k} text={String(v)} />
@@ -801,11 +2380,49 @@ function DVDetailContent() {
         ) : (
           <ShadCard>
             <CardContent className="p-0">
-              <pre className="p-6 text-sm font-mono text-foreground bg-muted/30 rounded-xl overflow-x-auto min-h-[400px] whitespace-pre">{dvYaml || "Loading..."}</pre>
+              <pre className="p-6 text-sm font-mono text-foreground bg-muted/30 rounded-lg overflow-x-auto min-h-[400px] whitespace-pre">{dvYaml || "Loading..."}</pre>
             </CardContent>
           </ShadCard>
         )}
       </div>
+    </div>
+  );
+}
+
+function resourceRoutes(config: ResourceConfig) {
+  return [
+    <Route key={`${config.id}-list`} path={config.path} element={<ResourceList config={config} />} />,
+    <Route key={`${config.id}-detail`} path={`${config.path}/:namespace/:name`} element={<ResourceDetail config={config} />} />,
+  ];
+}
+
+function SettingsPage() {
+  const [context, setContextState] = useState(getContext());
+  return (
+    <div className="space-y-6 animate-in fade-in duration-500">
+      <div className="flex flex-col gap-1">
+        <h1 className="text-2xl font-bold">Settings</h1>
+        <p className="text-sm text-muted-foreground">Manage dashboard preferences stored in this browser.</p>
+      </div>
+      <ShadCard>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Settings className="h-4 w-4 text-muted-foreground" />
+            <CardTitle className="text-sm">Kubernetes Context</CardTitle>
+          </div>
+          <CardDescription>The selected context is sent to the Go backend as X-Kube-Context.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 md:grid-cols-2">
+          <label className="flex flex-col gap-1.5">
+            <span className="text-sm font-medium text-foreground">Current Context</span>
+            <Input value={context} onChange={(event) => setContextState(event.target.value)} placeholder="leave empty for default" />
+          </label>
+          <div className="flex items-end gap-2">
+            <Button onClick={() => { localStorage.setItem("kube-context", context); window.location.reload(); }}>Save</Button>
+            <Button variant="outline" onClick={() => { localStorage.removeItem("kube-context"); setContextState(""); window.location.reload(); }}>Use Default</Button>
+          </div>
+        </CardContent>
+      </ShadCard>
     </div>
   );
 }
@@ -815,7 +2432,7 @@ function App() {
     <BrowserRouter>
       <SidebarProvider>
         <AppSidebar />
-        <SidebarInset>
+        <SidebarInset className="min-h-0 overflow-y-auto">
           <SiteHeader />
           <div className="flex flex-1 flex-col p-4 lg:p-8 max-w-[100rem] mx-auto w-full">
             <Routes>
@@ -826,6 +2443,8 @@ function App() {
               <Route path="/dvs" element={<DVList />} />
               <Route path="/dvs/:namespace/:name" element={<Navigate to="overview" replace />} />
               <Route path="/dvs/:namespace/:name/:tab" element={<DVDetailContent />} />
+              {Object.values(resourceConfigs).flatMap(resourceRoutes)}
+              <Route path="/settings" element={<SettingsPage />} />
               <Route path="*" element={<div className="p-20 text-center text-muted-foreground border-2 border-dashed rounded-lg mt-12">Page not found</div>} />
             </Routes>
           </div>

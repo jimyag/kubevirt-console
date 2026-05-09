@@ -24,7 +24,7 @@ export function SerialConsole({ namespace, name }: { namespace: string, name: st
 
   useEffect(() => {
     if (!termRef.current) return;
-    const term = new XTerm({ cursorBlink: true, fontSize: 14, fontFamily: 'Menlo, Consolas, monospace', theme: { background: "#09090b" }, convertEol: true, scrollback: 10000 });
+    const term = new XTerm({ cursorBlink: true, fontSize: 14, fontFamily: "var(--font-mono)", theme: { background: "transparent" }, convertEol: true, scrollback: 10000 });
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(termRef.current);
@@ -62,23 +62,23 @@ export function SerialConsole({ namespace, name }: { namespace: string, name: st
   }, [namespace, name]);
 
   return (
-    <div className={cn("bg-zinc-950 shadow-2xl overflow-hidden flex flex-col transition-all duration-300 relative", isTheaterMode ? "fixed inset-0 z-[100] h-screen w-screen rounded-none" : "rounded-2xl border border-zinc-800 h-[calc(100vh-280px)] min-h-[600px] w-full")}>
-      <div className="flex items-center justify-between gap-2 bg-zinc-900 border-b border-zinc-800 p-3 px-5">
+    <div className={cn("bg-card shadow-2xl overflow-hidden flex flex-col transition-all duration-300 relative", isTheaterMode ? "fixed inset-0 z-[100] h-screen w-screen rounded-none" : "rounded-lg border h-[calc(100vh-280px)] min-h-[600px] w-full")}>
+      <div className="flex items-center justify-between gap-2 bg-muted/50 border-b p-3 px-5">
          <div className="flex items-center gap-3">
-            <div className={cn("w-2.5 h-2.5 rounded-full", connStatus === "connected" ? "bg-green-500 animate-pulse shadow-[0_0_8px_rgba(34,197,94,0.5)]" : connStatus === "error" ? "bg-red-500" : "bg-zinc-600")} />
+            <div className={cn("w-2.5 h-2.5 rounded-full", connStatus === "connected" ? "bg-primary animate-pulse" : connStatus === "error" ? "bg-destructive" : "bg-muted-foreground")} />
             <div className="flex flex-col">
-               <span className="text-[10px] font-black uppercase text-zinc-400 tracking-widest">{connStatus === "connected" ? "Serial Console Active" : "Offline"}</span>
+               <span className="text-[10px] font-semibold text-muted-foreground">{connStatus === "connected" ? "Serial console active" : "Offline"}</span>
                {connStatus === "connected" && (
-                 <div className="flex items-center gap-1.5 text-blue-400 animate-in slide-in-from-top-1">
+                 <div className="flex items-center gap-1.5 text-primary animate-in slide-in-from-top-1">
                     <AlertCircle size={10} />
-                    <span className="text-[9px] font-bold uppercase tracking-tight text-blue-300">选中文字自动复制</span>
+                    <span className="text-[9px] font-bold text-primary">选中文字自动复制</span>
                  </div>
                )}
             </div>
          </div>
          <div className="flex gap-2">
-            <button onClick={syncSize} className="flex items-center gap-2 px-3 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-md text-[10px] font-bold uppercase transition-all border border-zinc-700 active:scale-95"><RefreshCw size={12} /> Sync Size</button>
-            <button onClick={() => setIsTheaterMode(!isTheaterMode)} className="flex items-center gap-2 px-3 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-md text-[10px] font-bold uppercase transition-all border border-zinc-700">{isTheaterMode ? <Minimize2 size={12} /> : <Maximize2 size={12} />} {isTheaterMode ? "Exit" : "Theater"}</button>
+            <button onClick={syncSize} className="flex items-center gap-2 px-3 py-1 bg-background hover:bg-muted/50 text-foreground rounded-md text-[10px] font-bold transition-all border active:scale-95"><RefreshCw size={12} /> Sync Size</button>
+            <button onClick={() => setIsTheaterMode(!isTheaterMode)} className="flex items-center gap-2 px-3 py-1 bg-background hover:bg-muted/50 text-foreground rounded-md text-[10px] font-bold transition-all border">{isTheaterMode ? <Minimize2 size={12} /> : <Maximize2 size={12} />} {isTheaterMode ? "Exit" : "Theater"}</button>
          </div>
       </div>
       <div ref={termRef} className="flex-1 p-2" />

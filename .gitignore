@@ -6,3 +6,5 @@ dashboard/ui/node_modules
 dashboard/ui/dist
 
 kite
+
+kubevirt-manager
