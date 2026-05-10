@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useState, type ReactNode } from "react"
 import { Link, useNavigate, useParams } from "react-router-dom"
 import * as YAML from "js-yaml"
 import {
@@ -228,12 +228,152 @@ const conditionStatusVariant = (status?: unknown) => statusVariant(String(status
 const isRecordValue = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value)
 
-const isComplexDetailValue = (value: unknown) =>
-  Array.isArray(value) || isRecordValue(value)
-
 const detailObjectTitle = (value: Record<string, unknown>, fallback: string) => {
   const title = value.name || value.type || value.action || value.protocol || value.kind || value.id
   return isPrimitiveDetailValue(title) && title !== undefined && title !== null && title !== "" ? compactValue(title) : fallback
+}
+
+const asRecord = (value: unknown) => isRecordValue(value) ? value : {}
+const asRecordList = (value: unknown) => Array.isArray(value) ? value.filter(isRecordValue) : []
+const joinList = (value: unknown) => Array.isArray(value) ? value.map(compactValue).join(", ") : compactValue(value)
+const objectLabels = (value: unknown) => Object.entries(asRecord(value)).map(([key, next]) => `${key}=${compactValue(next)}`)
+const resourceKeys = (value: Record<string, unknown>) => Object.keys(value).filter((key) => key !== "name" && hasRenderableValue(value[key]))
+const hasRenderableValue = (value: unknown) => !(value === undefined || value === null || value === "" || (Array.isArray(value) && value.length === 0))
+
+function CompactKvTable({ rows }: { rows: Array<{ label: string; value: unknown }> }) {
+  const visible = rows.filter((row) => hasRenderableValue(row.value))
+  if (visible.length === 0) return <span className="text-sm text-muted-foreground">None</span>
+  return (
+    <div className="overflow-hidden rounded-lg border">
+      <Table>
+        <TableBody>
+          {visible.map((row) => (
+            <TableRow key={row.label} className="hover:bg-muted/50">
+              <TableCell className="w-44 py-2 text-xs font-medium text-muted-foreground">{row.label}</TableCell>
+              <TableCell className="min-w-0 py-2 text-sm text-foreground">
+                {isPrimitiveDetailValue(row.value) ? compactValue(row.value) : <DetailValue value={row.value} depth={2} />}
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  )
+}
+
+function ChipList({ values }: { values: unknown[] }) {
+  if (values.length === 0) return <span className="text-sm text-muted-foreground">None</span>
+  return (
+    <div className="flex min-w-0 flex-wrap gap-1.5">
+      {values.slice(0, 20).map((item, index) => (
+        <span key={`${compactValue(item)}-${index}`} className="min-w-0 max-w-full break-words rounded-md border bg-muted px-2 py-1 text-xs text-foreground">
+          {compactValue(item)}
+        </span>
+      ))}
+      {values.length > 20 && <span className="text-xs text-muted-foreground">+{values.length - 20} more</span>}
+    </div>
+  )
+}
+
+function DetailContainerTable({ containers, statuses }: { containers: Record<string, unknown>[]; statuses?: Record<string, unknown>[] }) {
+  if (containers.length === 0) return <span className="text-sm text-muted-foreground">No containers</span>
+  return (
+    <div className="overflow-x-auto rounded-lg border">
+      <Table className="min-w-[880px]">
+        <TableHeader className="bg-muted">
+          <TableRow>
+            <TableHead className="text-xs">Name</TableHead>
+            <TableHead className="text-xs">Image</TableHead>
+            <TableHead className="text-xs">Ready</TableHead>
+            <TableHead className="text-xs">Restarts</TableHead>
+            <TableHead className="text-xs">Ports</TableHead>
+            <TableHead className="text-xs">Resources</TableHead>
+            <TableHead className="text-xs">Args</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {containers.map((container) => {
+            const status = statuses?.find((item) => item.name === container.name) || {}
+            const resources = asRecord(container.resources)
+            const requests = asRecord(resources.requests)
+            const limits = asRecord(resources.limits)
+            const ports = asRecordList(container.ports)
+            return (
+              <TableRow key={String(container.name)} className="hover:bg-muted/50">
+                <TableCell className="font-semibold">{compactValue(container.name)}</TableCell>
+                <TableCell className="max-w-[260px] break-all text-xs text-muted-foreground">{compactValue(container.image)}</TableCell>
+                <TableCell><Badge variant={status.ready ? "success" : "outline"}>{compactValue(status.ready)}</Badge></TableCell>
+                <TableCell className="tabular-nums">{compactValue(status.restartCount ?? 0)}</TableCell>
+                <TableCell className="text-xs text-muted-foreground">
+                  {ports.length ? ports.map((port) => `${compactValue(port.containerPort || port.port)}/${compactValue(port.protocol || "TCP")}`).join(", ") : "None"}
+                </TableCell>
+                <TableCell className="text-xs text-muted-foreground">
+                  {[Object.keys(requests).length ? `req ${objectLabels(requests).join(", ")}` : "", Object.keys(limits).length ? `lim ${objectLabels(limits).join(", ")}` : ""].filter(Boolean).join(" / ") || "None"}
+                </TableCell>
+                <TableCell className="max-w-[280px] text-xs text-muted-foreground">
+                  <div className="line-clamp-3 break-words">{joinList(container.args) || joinList(container.command) || "None"}</div>
+                </TableCell>
+              </TableRow>
+            )
+          })}
+        </TableBody>
+      </Table>
+    </div>
+  )
+}
+
+function DetailVolumeTable({ volumes }: { volumes: Record<string, unknown>[] }) {
+  if (volumes.length === 0) return <span className="text-sm text-muted-foreground">No volumes</span>
+  return (
+    <div className="overflow-x-auto rounded-lg border">
+      <Table className="min-w-[720px]">
+        <TableHeader className="bg-muted">
+          <TableRow>
+            <TableHead className="text-xs">Name</TableHead>
+            <TableHead className="text-xs">Type</TableHead>
+            <TableHead className="text-xs">Source</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {volumes.map((volume) => {
+            const type = resourceKeys(volume)[0] || "volume"
+            const source = asRecord(volume[type])
+            return (
+              <TableRow key={String(volume.name)} className="hover:bg-muted/50">
+                <TableCell className="font-semibold">{compactValue(volume.name)}</TableCell>
+                <TableCell>{type}</TableCell>
+                <TableCell className="break-words text-xs text-muted-foreground">
+                  {Object.keys(source).length ? objectLabels(source).join(", ") : compactValue(volume[type])}
+                </TableCell>
+              </TableRow>
+            )
+          })}
+        </TableBody>
+      </Table>
+    </div>
+  )
+}
+
+function DetailSimpleObjectTable({ rows }: { rows: Record<string, unknown>[] }) {
+  const keys = Array.from(new Set(rows.flatMap((row) => Object.keys(row).filter((key) => isPrimitiveDetailValue(row[key]))))).slice(0, 6)
+  if (keys.length === 0) return <ChipList values={rows.map((row, index) => detailObjectTitle(row, `Item ${index + 1}`))} />
+  return (
+    <div className="overflow-x-auto rounded-lg border">
+      <Table className="min-w-[640px]">
+        <TableHeader className="bg-muted">
+          <TableRow>{keys.map((key) => <TableHead key={key} className="text-xs">{key}</TableHead>)}</TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.slice(0, 12).map((row, index) => (
+            <TableRow key={index} className="hover:bg-muted/50">
+              {keys.map((key) => <TableCell key={key} className="max-w-[220px] break-words text-xs">{compactValue(row[key])}</TableCell>)}
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+      {rows.length > 12 && <div className="border-t px-3 py-2 text-xs text-muted-foreground">+{rows.length - 12} more</div>}
+    </div>
+  )
 }
 
 function DetailValue({ value, depth = 0 }: { value: unknown; depth?: number }) {
@@ -278,6 +418,19 @@ function DetailValue({ value, depth = 0 }: { value: unknown; depth?: number }) {
 
     const objectLike = value.every((item) => isRecordValue(item))
     if (objectLike) {
+      const records = value as Record<string, unknown>[]
+      if (records.every((item) => "image" in item && "name" in item)) {
+        return <DetailContainerTable containers={records} />
+      }
+      if (records.every((item) => "name" in item && resourceKeys(item).length > 0) && records.some((item) => ["hostPath", "persistentVolumeClaim", "configMap", "secret", "emptyDir", "projected", "downwardAPI", "csi"].some((key) => key in item))) {
+        return <DetailVolumeTable volumes={records} />
+      }
+      if (records.every((item) => "key" in item || "effect" in item || "operator" in item)) {
+        return <DetailSimpleObjectTable rows={records} />
+      }
+      if (records.every((item) => Object.values(item).every((next) => isPrimitiveDetailValue(next)))) {
+        return <DetailSimpleObjectTable rows={records} />
+      }
       return (
         <div className="grid gap-2">
           {value.slice(0, 12).map((item, index) => {
@@ -429,7 +582,17 @@ const relatedPodsForResource = (resource: KubeResource) => {
   }
 
   if (["VirtualMachine", "VirtualMachineInstance"].includes(kind)) {
-    return { namespace, selector: { "kubevirt.io/domain": name }, title: "Virtual Machine Pods" }
+    const selectors: Array<Record<string, string>> = [
+      { "vm.kubevirt.io/name": name },
+      { "vmi.kubevirt.io/id": name },
+      { "las.qiniu.io/vm-id": name },
+      { "kubevirt.io/domain": name },
+    ]
+    return {
+      namespace,
+      selectors,
+      title: "Virtual Machine Pods",
+    }
   }
 
   const templateLabels = selectorFromMatchLabels(getValue(resource, ["spec", "template", "metadata", "labels"]))
@@ -448,6 +611,379 @@ function ResourceStatus({ resource, config }: { resource: KubeResource; config: 
     "Active"
 
   return <Badge variant={statusVariant(String(value))}>{String(value)}</Badge>
+}
+
+function PodDetailOverview({ resource }: { resource: KubeResource }) {
+  const spec = asRecord(resource.spec)
+  const status = asRecord(resource.status)
+  const containers = asRecordList(spec.containers)
+  const initContainers = asRecordList(spec.initContainers)
+  const containerStatuses = asRecordList(status.containerStatuses)
+  const initContainerStatuses = asRecordList(status.initContainerStatuses)
+  const volumes = asRecordList(spec.volumes)
+  const conditions = asRecordList(status.conditions)
+  const podIPs = asRecordList(status.podIPs).map((item) => item.ip).filter(Boolean)
+  const nodeSelector = objectLabels(spec.nodeSelector)
+  const tolerations = asRecordList(spec.tolerations)
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <Card>
+          <CardHeader className="pb-3">
+            <CardDescription>Phase</CardDescription>
+            <CardTitle className="text-sm font-semibold"><Badge variant={statusVariant(String(status.phase || ""))}>{compactValue(status.phase)}</Badge></CardTitle>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader className="pb-3">
+            <CardDescription>Pod IP</CardDescription>
+            <CardTitle className="break-all text-sm font-semibold">{compactValue(status.podIP)}</CardTitle>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader className="pb-3">
+            <CardDescription>Node</CardDescription>
+            <CardTitle className="break-all text-sm font-semibold">{compactValue(spec.nodeName)}</CardTitle>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader className="pb-3">
+            <CardDescription>QoS</CardDescription>
+            <CardTitle className="text-sm font-semibold">{compactValue(status.qosClass)}</CardTitle>
+          </CardHeader>
+        </Card>
+      </div>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm">Containers</CardTitle>
+          <CardDescription>Runtime readiness, image, ports, resources, and startup arguments.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <DetailContainerTable containers={containers} statuses={containerStatuses} />
+          {initContainers.length > 0 && (
+            <div className="space-y-2">
+              <div className="text-xs font-medium text-muted-foreground">Init Containers</div>
+              <DetailContainerTable containers={initContainers} statuses={initContainerStatuses} />
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm">Scheduling</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <CompactKvTable rows={[
+              { label: "Service Account", value: spec.serviceAccountName },
+              { label: "Restart Policy", value: spec.restartPolicy },
+              { label: "Priority Class", value: spec.priorityClassName },
+              { label: "Priority", value: spec.priority },
+              { label: "Runtime Class", value: spec.runtimeClassName },
+              { label: "Node Selector", value: nodeSelector },
+              { label: "Tolerations", value: tolerations },
+              { label: "Start Time", value: status.startTime },
+            ]} />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm">Networking</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <CompactKvTable rows={[
+              { label: "Host IP", value: status.hostIP },
+              { label: "Pod IPs", value: podIPs },
+              { label: "DNS Policy", value: spec.dnsPolicy },
+              { label: "Host Network", value: spec.hostNetwork },
+              { label: "Host PID", value: spec.hostPID },
+              { label: "Host IPC", value: spec.hostIPC },
+            ]} />
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm">Volumes</CardTitle>
+          <CardDescription>Mounted volume sources declared by the pod spec.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <DetailVolumeTable volumes={volumes} />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm">Conditions</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <DetailValue value={conditions} />
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
+function SummaryCard({ label, value, variant }: { label: string; value: unknown; variant?: string }) {
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardDescription>{label}</CardDescription>
+        <CardTitle className="break-words text-sm font-semibold">
+          {variant ? <Badge variant={statusVariant(variant)}>{compactValue(value)}</Badge> : compactValue(value)}
+        </CardTitle>
+      </CardHeader>
+    </Card>
+  )
+}
+
+function SectionCard({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm">{title}</CardTitle>
+        {description && <CardDescription>{description}</CardDescription>}
+      </CardHeader>
+      <CardContent>{children}</CardContent>
+    </Card>
+  )
+}
+
+function WorkloadDetailOverview({ resource }: { resource: KubeResource }) {
+  const spec = asRecord(resource.spec)
+  const status = asRecord(resource.status)
+  const template = asRecord(spec.template)
+  const templateSpec = asRecord(template.spec)
+  const containers = asRecordList(templateSpec.containers)
+  const volumes = asRecordList(templateSpec.volumes)
+  const selector = asRecord(spec.selector).matchLabels || spec.selector
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+        <SummaryCard label="Replicas" value={status.replicas ?? spec.replicas} />
+        <SummaryCard label="Ready" value={status.readyReplicas} />
+        <SummaryCard label="Available" value={status.availableReplicas} />
+        <SummaryCard label="Updated" value={status.updatedReplicas} />
+        <SummaryCard label="Unavailable" value={status.unavailableReplicas} />
+      </div>
+      <div className="grid gap-4 xl:grid-cols-2">
+        <SectionCard title="Rollout">
+          <CompactKvTable rows={[
+            { label: "Selector", value: objectLabels(selector) },
+            { label: "Strategy", value: spec.strategy || spec.updateStrategy },
+            { label: "Min Ready Seconds", value: spec.minReadySeconds },
+            { label: "Revision History", value: spec.revisionHistoryLimit },
+            { label: "Observed Generation", value: status.observedGeneration },
+          ]} />
+        </SectionCard>
+        <SectionCard title="Pod Template">
+          <CompactKvTable rows={[
+            { label: "Service Account", value: templateSpec.serviceAccountName },
+            { label: "Restart Policy", value: templateSpec.restartPolicy },
+            { label: "Labels", value: objectLabels(asRecord(template.metadata).labels) },
+            { label: "Annotations", value: objectLabels(asRecord(template.metadata).annotations) },
+          ]} />
+        </SectionCard>
+      </div>
+      <SectionCard title="Template Containers">
+        <DetailContainerTable containers={containers} />
+      </SectionCard>
+      <SectionCard title="Template Volumes">
+        <DetailVolumeTable volumes={volumes} />
+      </SectionCard>
+      <SectionCard title="Conditions">
+        <DetailValue value={status.conditions} />
+      </SectionCard>
+    </div>
+  )
+}
+
+function NetworkDetailOverview({ resource }: { resource: KubeResource }) {
+  const spec = asRecord(resource.spec)
+  const status = asRecord(resource.status)
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <SummaryCard label="Type" value={spec.type || resource.kind} />
+        <SummaryCard label="Class" value={spec.ingressClassName || spec.gatewayClassName || spec.controllerName || spec.provider} />
+        <SummaryCard label="Selector" value={objectLabels(spec.selector || asRecord(spec.podSelector).matchLabels).length || "N/A"} />
+        <SummaryCard label="Address" value={spec.clusterIP || spec.cidrBlock || spec.cidr || spec.vpc || compactValue(asRecord(status).addresses)} />
+      </div>
+      <div className="grid gap-4 xl:grid-cols-2">
+        <SectionCard title="Routing And Selectors">
+          <CompactKvTable rows={[
+            { label: "Selector", value: objectLabels(spec.selector || asRecord(spec.podSelector).matchLabels) },
+            { label: "Policy Types", value: spec.policyTypes },
+            { label: "Ports", value: spec.ports },
+            { label: "Rules", value: spec.rules || spec.ingress || spec.egress },
+            { label: "Hostnames", value: spec.hostnames },
+            { label: "Parent Refs", value: spec.parentRefs },
+          ]} />
+        </SectionCard>
+        <SectionCard title="Addresses">
+          <CompactKvTable rows={[
+            { label: "Cluster IP", value: spec.clusterIP },
+            { label: "Cluster IPs", value: spec.clusterIPs },
+            { label: "External IPs", value: spec.externalIPs },
+            { label: "Load Balancer", value: status.loadBalancer },
+            { label: "CIDR", value: spec.cidrBlock || spec.cidr },
+            { label: "Gateway", value: spec.gateway || spec.gatewayNode },
+          ]} />
+        </SectionCard>
+      </div>
+      <SectionCard title="Status">
+        <DetailValue value={status.conditions || status} />
+      </SectionCard>
+    </div>
+  )
+}
+
+function StorageDetailOverview({ resource }: { resource: KubeResource }) {
+  const spec = asRecord(resource.spec)
+  const status = asRecord(resource.status)
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <SummaryCard label="Phase" value={status.phase || status.status || resource.kind} variant={String(status.phase || status.status || "")} />
+        <SummaryCard label="Capacity" value={asRecord(status.capacity).storage || asRecord(spec.resources).requests} />
+        <SummaryCard label="Storage Class" value={spec.storageClassName || resource.storageClassName || resource.provisioner} />
+        <SummaryCard label="Access Modes" value={spec.accessModes || resource.reclaimPolicy} />
+      </div>
+      <div className="grid gap-4 xl:grid-cols-2">
+        <SectionCard title="Storage">
+          <CompactKvTable rows={[
+            { label: "Provisioner", value: resource.provisioner },
+            { label: "Volume Name", value: spec.volumeName },
+            { label: "Volume Mode", value: spec.volumeMode },
+            { label: "Reclaim Policy", value: resource.reclaimPolicy || spec.persistentVolumeReclaimPolicy },
+            { label: "Binding Mode", value: resource.volumeBindingMode },
+            { label: "Expansion", value: resource.allowVolumeExpansion },
+          ]} />
+        </SectionCard>
+        <SectionCard title="Source And Parameters">
+          <CompactKvTable rows={[
+            { label: "Parameters", value: resource.parameters },
+            { label: "Source", value: spec.source || spec.csi || spec.hostPath || spec.nfs },
+            { label: "Claim Ref", value: spec.claimRef },
+            { label: "Node Affinity", value: spec.nodeAffinity },
+            { label: "Conditions", value: status.conditions },
+          ]} />
+        </SectionCard>
+      </div>
+    </div>
+  )
+}
+
+function VirtualizationDetailOverview({ resource }: { resource: KubeResource }) {
+  const spec = asRecord(resource.spec)
+  const status = asRecord(resource.status)
+  const template = asRecord(spec.template)
+  const templateSpec = asRecord(template.spec)
+  const domain = asRecord(templateSpec.domain || spec.domain)
+  const devices = asRecord(domain.devices)
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <SummaryCard label="Printable Status" value={status.printableStatus || status.phase || status.conditions} variant={String(status.printableStatus || status.phase || "")} />
+        <SummaryCard label="Run Strategy" value={spec.runStrategy || spec.running} />
+        <SummaryCard label="Node" value={status.nodeName} />
+        <SummaryCard label="IP" value={asRecordList(status.interfaces).map((item) => item.ipAddress).filter(Boolean)} />
+      </div>
+      <div className="grid gap-4 xl:grid-cols-2">
+        <SectionCard title="Compute">
+          <CompactKvTable rows={[
+            { label: "CPU", value: domain.cpu },
+            { label: "Memory", value: asRecord(domain.resources).requests || spec.memory },
+            { label: "Machine", value: asRecord(domain.machine).type },
+            { label: "Firmware", value: domain.firmware },
+            { label: "Features", value: domain.features },
+          ]} />
+        </SectionCard>
+        <SectionCard title="Runtime">
+          <CompactKvTable rows={[
+            { label: "Phase", value: status.phase },
+            { label: "Conditions", value: status.conditions },
+            { label: "Guest OS", value: status.guestOSInfo },
+            { label: "Migration", value: status.migrationState },
+          ]} />
+        </SectionCard>
+      </div>
+      <SectionCard title="Disks And Volumes">
+        <div className="grid gap-4 xl:grid-cols-2">
+          <DetailValue value={devices.disks || spec.disks} />
+          <DetailVolumeTable volumes={asRecordList(templateSpec.volumes || spec.volumes)} />
+        </div>
+      </SectionCard>
+      <SectionCard title="Networks">
+        <DetailValue value={templateSpec.networks || devices.interfaces || spec.networks || spec.interfaces} />
+      </SectionCard>
+    </div>
+  )
+}
+
+function NodeDetailOverview({ resource }: { resource: KubeResource }) {
+  const spec = asRecord(resource.spec)
+  const status = asRecord(resource.status)
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <SummaryCard label="Status" value={asRecordList(status.conditions).find((item) => item.status === "True")?.type || "Unknown"} />
+        <SummaryCard label="Kubelet" value={asRecord(status.nodeInfo).kubeletVersion} />
+        <SummaryCard label="OS" value={asRecord(status.nodeInfo).osImage} />
+        <SummaryCard label="Unschedulable" value={spec.unschedulable || false} />
+      </div>
+      <div className="grid gap-4 xl:grid-cols-2">
+        <SectionCard title="Capacity"><CompactKvTable rows={Object.entries(asRecord(status.capacity)).map(([label, value]) => ({ label, value }))} /></SectionCard>
+        <SectionCard title="Allocatable"><CompactKvTable rows={Object.entries(asRecord(status.allocatable)).map(([label, value]) => ({ label, value }))} /></SectionCard>
+      </div>
+      <SectionCard title="Conditions"><DetailValue value={status.conditions} /></SectionCard>
+      <SectionCard title="Addresses"><DetailValue value={status.addresses} /></SectionCard>
+    </div>
+  )
+}
+
+function StructuredResourceOverview({ resource, sections }: { resource: KubeResource; sections: DetailSection[] }) {
+  const spec = asRecord(resource.spec)
+  const status = asRecord(resource.status)
+  const topSpec = Object.entries(spec).filter(([, value]) => hasRenderableValue(value)).slice(0, 12).map(([label, value]) => ({ label, value }))
+  const topStatus = Object.entries(status).filter(([, value]) => hasRenderableValue(value)).slice(0, 12).map(([label, value]) => ({ label, value }))
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <SummaryCard label="Kind" value={resource.kind} />
+        <SummaryCard label="API Version" value={resource.apiVersion} />
+        <SummaryCard label="Status" value={getValue(resource, ["status", "phase"]) ?? getValue(resource, ["status", "conditions", "0", "type"]) ?? "Active"} />
+        <SummaryCard label="Created" value={resource.metadata.creationTimestamp} />
+      </div>
+      <div className="grid gap-4 xl:grid-cols-2">
+        <SectionCard title="Spec"><CompactKvTable rows={topSpec} /></SectionCard>
+        <SectionCard title="Status"><CompactKvTable rows={topStatus} /></SectionCard>
+      </div>
+      {sections.filter((section) => !["Metadata", "Status"].includes(section.title)).map((section) => (
+        <SectionCard key={section.title} title={section.title} description={section.description}>
+          <CompactKvTable rows={section.items.map((item) => ({ label: item.label, value: item.value }))} />
+        </SectionCard>
+      ))}
+    </div>
+  )
+}
+
+function ResourceSpecificOverview({ resource, config, sections }: { resource: KubeResource; config: ResourceConfig; sections: DetailSection[] }) {
+  const kind = resource.kind || config.kind
+  const id = config.id
+  if (kind === "Pod") return <PodDetailOverview resource={resource} />
+  if (["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job", "CronJob", "HorizontalPodAutoscaler", "VirtualMachinePool", "VirtualMachineInstanceReplicaSet"].includes(kind)) return <WorkloadDetailOverview resource={resource} />
+  if (kind === "Node") return <NodeDetailOverview resource={resource} />
+  if (["Service", "Ingress", "IngressClass", "NetworkPolicy", "EndpointSlice", "Endpoints", "NetworkAttachmentDefinition", "Gateway", "GatewayClass", "HTTPRoute"].includes(kind) || id.toLowerCase().includes("network") || id.toLowerCase().includes("route") || id.toLowerCase().includes("gateway") || id.toLowerCase().includes("cilium") || id.toLowerCase().includes("calico") || id.toLowerCase().includes("kubeovn")) return <NetworkDetailOverview resource={resource} />
+  if (["PersistentVolume", "PersistentVolumeClaim", "StorageClass", "CSIDriver", "CSINode", "CSIStorageCapacity", "VolumeAttachment", "VolumeSnapshot", "VolumeSnapshotClass", "VolumeSnapshotContent", "DataVolume", "DataSource", "StorageProfile"].includes(kind) || id.toLowerCase().includes("volume") || id.toLowerCase().includes("storage") || id.toLowerCase().includes("snapshot")) return <StorageDetailOverview resource={resource} />
+  if (kind.includes("VirtualMachine") || kind === "KubeVirt" || kind.startsWith("CDI") || ["ObjectTransfer", "DataImportCron", "VolumeImportSource", "VolumeUploadSource", "VolumeCloneSource"].includes(kind)) return <VirtualizationDetailOverview resource={resource} />
+  return <StructuredResourceOverview resource={resource} sections={sections} />
 }
 
 const fieldDefaults = (fields?: CreateFormField[]) =>
@@ -1126,40 +1662,14 @@ export function ResourceDetail({ config }: { config: ResourceConfig }) {
         </Card>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-3">
-        {sections.map((section) => (
-          <Card key={section.title}>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm">{section.title}</CardTitle>
-              {section.description && <CardDescription>{section.description}</CardDescription>}
-            </CardHeader>
-            <CardContent className="pt-0">
-              <dl className="divide-y">
-                {section.items.map((item) => {
-                  const wide = item.fullWidth || isComplexDetailValue(item.value)
-                  return (
-                  <div key={item.label} className={cn(
-                    "grid min-w-0 gap-1 py-2",
-                    wide ? "" : "md:grid-cols-[8rem_minmax(0,1fr)] md:items-start md:gap-3"
-                  )}>
-                    <dt className="min-w-0 break-words text-xs font-medium text-muted-foreground">{item.label}</dt>
-                    <dd className="min-w-0 break-words text-sm text-foreground">
-                      <DetailValue value={item.value} />
-                    </dd>
-                  </div>
-                  )
-                })}
-              </dl>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+      <ResourceSpecificOverview resource={resource} config={config} sections={sections} />
 
       {relatedPods && (
         <RelatedPodsCard
           title={relatedPods.title}
           namespace={relatedPods.namespace}
           selector={relatedPods.selector}
+          selectors={relatedPods.selectors}
           podName={relatedPods.podName}
           pods={relatedPods.pods}
         />

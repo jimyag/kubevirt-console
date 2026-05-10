@@ -121,6 +121,9 @@ const kubernetesResourceGroups: KubernetesResourceGroup[] = [
       resourceConfigs.statefulsets,
       resourceConfigs.daemonsets,
       resourceConfigs.replicasets,
+      resourceConfigs.replicationcontrollers,
+      resourceConfigs.controllerrevisions,
+      resourceConfigs.podtemplates,
       resourceConfigs.jobs,
       resourceConfigs.cronjobs,
       resourceConfigs.horizontalpodautoscalers,
@@ -153,16 +156,51 @@ const kubernetesResourceGroups: KubernetesResourceGroup[] = [
     description: "Disruption and scheduling-adjacent Kubernetes policy resources.",
     resources: [
       resourceConfigs.poddisruptionbudgets,
+      resourceConfigs.limitranges,
+      resourceConfigs.resourcequotas,
     ],
   },
   {
     slug: "cluster",
     title: "Cluster Definitions",
-    description: "Namespaces, Events, and CustomResourceDefinitions.",
+    description: "Namespaces, Events, CRDs, API services, leases, runtime classes, and scheduling classes.",
     resources: [
       resourceConfigs.namespaces,
       resourceConfigs.events,
+      resourceConfigs.componentstatuses,
       resourceConfigs.customresourcedefinitions,
+      resourceConfigs.apiservices,
+      resourceConfigs.leases,
+      resourceConfigs.runtimeclasses,
+      resourceConfigs.priorityclasses,
+    ],
+  },
+  {
+    slug: "admission",
+    title: "Admission",
+    description: "Webhook and CEL admission policy resources.",
+    resources: [
+      resourceConfigs.mutatingwebhookconfigurations,
+      resourceConfigs.validatingwebhookconfigurations,
+      resourceConfigs.validatingadmissionpolicies,
+      resourceConfigs.validatingadmissionpolicybindings,
+    ],
+  },
+  {
+    slug: "flow-control",
+    title: "Flow Control",
+    description: "API priority and fairness flow schemas and priority levels.",
+    resources: [
+      resourceConfigs.flowschemas,
+      resourceConfigs.prioritylevelconfigurations,
+    ],
+  },
+  {
+    slug: "certificates",
+    title: "Certificates",
+    description: "Certificate signing request inspection and lifecycle.",
+    resources: [
+      resourceConfigs.certificatesigningrequests,
     ],
   },
 ];

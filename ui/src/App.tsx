@@ -58,6 +58,22 @@ const apiFetch = (url: string, options: RequestInit = {}) => {
 };
 const parseStorage = (s?: string): number => { if (!s) return 0; const num = parseFloat(s); if (s.endsWith("Ti")) return num * 1024; if (s.endsWith("Gi")) return num; if (s.endsWith("Mi")) return num / 1024; return num / (1024 * 1024); };
 const formatStorage = (gi: number): string => gi >= 1024 ? `${(gi / 1024).toFixed(1)}Ti` : `${gi.toFixed(1)}Gi`;
+const vmPodSelectors = (name: string): Array<Record<string, string>> => [
+  { "vm.kubevirt.io/name": name },
+  { "vmi.kubevirt.io/id": name },
+  { "las.qiniu.io/vm-id": name },
+  { "kubevirt.io/domain": name },
+];
+const findVmPod = async (namespace: string, name: string) => {
+  for (const selector of vmPodSelectors(name)) {
+    const labelSelector = Object.entries(selector).map(([key, value]) => `${key}=${value}`).join(",");
+    const ps = await apiFetch(`/api/v1/namespaces/${namespace}/pods?labelSelector=${encodeURIComponent(labelSelector)}`);
+    if (!ps.ok) continue;
+    const pod = (await ps.json()).items?.[0];
+    if (pod) return pod;
+  }
+  return null;
+};
 
 // --- Shared Components ---
 type StatusVariant = "outline" | "success" | "warning" | "danger";
@@ -606,7 +622,7 @@ function VMDetailContent() {
       const vmData = vmRes.ok ? await vmRes.json() : null; setVm(vmData); if (vmiRes.ok) setVmi(await vmiRes.json()); if (yamlRes.ok) setVmYaml(await yamlRes.text()); if (eventsRes.ok) setEvents((await eventsRes.json()).items || []);
       let strat = mStrategy; if (strat === null) { const apisRes = await apiFetch("/apis"); if (apisRes.ok) { strat = (await apisRes.json()).groups?.some((g:any) => g.name === "metrics.kubevirt.io") ? "vmi" : "pod"; setMStrategy(strat); } }
       if (strat === "vmi") { const m = await apiFetch(`/apis/metrics.kubevirt.io/v1beta1/namespaces/${namespace}/virtualmachineinstances/${name}`); if (m.ok) { const d = await m.json(); setMetrics(p => [...p.slice(-19), { timestamp: Date.now(), time: new Date().toISOString(), cpuUsage: d.status?.cpu?.usageCores || 0, memoryUsage: (d.status?.memory?.usageBytes || 0) / (1024 * 1024) }]); } }
-      else if (strat === "pod") { const ps = await apiFetch(`/api/v1/namespaces/${namespace}/pods?labelSelector=kubevirt.io/domain=${name}`); if (ps.ok) { const pod = (await ps.json()).items?.[0]; if (pod) { const pm = await apiFetch(`/apis/metrics.k8s.io/v1beta1/namespaces/${namespace}/pods/${pod.metadata.name}`); if (pm.ok) { const d = await pm.json(); const cpu = d.containers?.[0]?.usage?.cpu || "0n"; const mem = d.containers?.[0]?.usage?.memory || "0Ki"; const pCpu = (c:string) => c.endsWith("n") ? parseInt(c)/1e9 : c.endsWith("u") ? parseInt(c)/1e6 : c.endsWith("m") ? parseInt(c)/1e3 : parseInt(c); const pMem = (m:string) => m.endsWith("Ki") ? parseInt(m)/1024 : m.endsWith("Mi") ? parseInt(m) : m.endsWith("Gi") ? parseInt(m)*1024 : parseInt(m)/(1024*1024); setMetrics(p => [...p.slice(-19), { timestamp: Date.now(), time: new Date().toISOString(), cpuUsage: pCpu(cpu), memoryUsage: pMem(mem) }]); } } } }
+      else if (strat === "pod") { const pod = await findVmPod(namespace!, name!); if (pod) { const pm = await apiFetch(`/apis/metrics.k8s.io/v1beta1/namespaces/${namespace}/pods/${pod.metadata.name}`); if (pm.ok) { const d = await pm.json(); const cpu = d.containers?.[0]?.usage?.cpu || "0n"; const mem = d.containers?.[0]?.usage?.memory || "0Ki"; const pCpu = (c:string) => c.endsWith("n") ? parseInt(c)/1e9 : c.endsWith("u") ? parseInt(c)/1e6 : c.endsWith("m") ? parseInt(c)/1e3 : parseInt(c); const pMem = (m:string) => m.endsWith("Ki") ? parseInt(m)/1024 : m.endsWith("Mi") ? parseInt(m) : m.endsWith("Gi") ? parseInt(m)*1024 : parseInt(m)/(1024*1024); setMetrics(p => [...p.slice(-19), { timestamp: Date.now(), time: new Date().toISOString(), cpuUsage: pCpu(cpu), memoryUsage: pMem(mem) }]); } } }
       if (vmData?.spec.template?.spec?.volumes) { const dns = vmData.spec.template.spec.volumes.filter((v:any) => v.dataVolume).map((v:any) => v.dataVolume.name); if (dns.length > 0) { const ds = await Promise.all(dns.map((dn:string) => apiFetch(`/apis/cdi.kubevirt.io/v1beta1/namespaces/${namespace}/datavolumes/${dn}`).then(r => r.ok ? r.json() : null))); setAssociatedDVs(ds.filter(d => d !== null)); } }
     } finally { setLoading(false); }
   };
@@ -964,7 +980,7 @@ function VMDetailContent() {
                 title="Virtual Machine Pods"
                 description="Pods created for this VM runtime. Use these for logs and shell access."
                 namespace={namespace!}
-                selector={{ "kubevirt.io/domain": name! }}
+                selectors={vmPodSelectors(name!)}
               />
 
               <ShadCard className="lg:col-span-3">

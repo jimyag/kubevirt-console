@@ -49,6 +49,7 @@ type RelatedPodsCardProps = {
   description?: string
   namespace: string
   selector?: Record<string, string>
+  selectors?: Array<Record<string, string>>
   podName?: string
   pods?: PodSummary[]
   className?: string
@@ -354,11 +355,15 @@ export function PodAccessButtons({ pod }: { pod: PodSummary }) {
   )
 }
 
-export function RelatedPodsCard({ title = "Related Pods", description, namespace, selector, podName, pods, className }: RelatedPodsCardProps) {
+export function RelatedPodsCard({ title = "Related Pods", description, namespace, selector, selectors, podName, pods, className }: RelatedPodsCardProps) {
   const [items, setItems] = useState<PodSummary[]>(pods || [])
   const [loading, setLoading] = useState(!pods)
   const [error, setError] = useState("")
-  const selectorValue = useMemo(() => selectorText(selector), [selector])
+  const selectorValues = useMemo(
+    () => (selectors && selectors.length > 0 ? selectors : selector ? [selector] : []).map(selectorText).filter(Boolean),
+    [selector, selectors]
+  )
+  const selectorKey = selectorValues.join("|")
 
   const load = async () => {
     if (pods) {
@@ -366,17 +371,32 @@ export function RelatedPodsCard({ title = "Related Pods", description, namespace
       setLoading(false)
       return
     }
-    if (!namespace || (!selectorValue && !podName)) return
+    if (!namespace || (selectorValues.length === 0 && !podName)) return
     setLoading(true)
     setError("")
     try {
-      const url = podName
-        ? `/api/v1/namespaces/${namespace}/pods/${podName}`
-        : `/api/v1/namespaces/${namespace}/pods?labelSelector=${encodeURIComponent(selectorValue)}`
-      const response = await apiFetch(url)
-      if (!response.ok) throw new Error(await response.text())
-      const data = await response.json()
-      setItems(podName ? [data] : data.items || [])
+      if (podName) {
+        const response = await apiFetch(`/api/v1/namespaces/${namespace}/pods/${podName}`)
+        if (!response.ok) throw new Error(await response.text())
+        setItems([await response.json()])
+        return
+      }
+
+      let lastError = ""
+      for (const nextSelector of selectorValues) {
+        const response = await apiFetch(`/api/v1/namespaces/${namespace}/pods?labelSelector=${encodeURIComponent(nextSelector)}`)
+        if (!response.ok) {
+          lastError = await response.text()
+          continue
+        }
+        const data = await response.json()
+        if ((data.items || []).length > 0) {
+          setItems(data.items || [])
+          return
+        }
+      }
+      if (lastError) throw new Error(lastError)
+      setItems([])
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load related pods")
       setItems([])
@@ -387,7 +407,7 @@ export function RelatedPodsCard({ title = "Related Pods", description, namespace
 
   useEffect(() => {
     load()
-  }, [namespace, selectorValue, podName])
+  }, [namespace, selectorKey, podName])
 
   return (
     <Card className={className}>

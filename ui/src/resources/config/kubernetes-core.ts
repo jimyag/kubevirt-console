@@ -462,3 +462,228 @@ export const customresourcedefinitionsConfig = extensionResource({
   detailSections: kubernetesCustomResourceDefinitionDetailSections,
   extraColumns: [{ label: "Group", value: (r) => String(shared.getRecord(r.spec).group || "N/A") }, { label: "Scope", value: (r) => String(shared.getRecord(r.spec).scope || "N/A") }],
 });
+
+export const componentstatusesConfig = namedCoreResource({
+  id: "componentstatuses",
+  path: "/kubernetes/cluster/component-statuses",
+  title: "Component Statuses",
+  subtitle: "Inspect legacy Kubernetes control plane component health",
+  kind: "ComponentStatus",
+  namespaced: false,
+  allowCreate: false,
+  allowDelete: false,
+  statusPath: ["conditions", "0", "type"],
+  extraColumns: [{ label: "Conditions", value: (r) => String(Array.isArray((r as any).conditions) ? (r as any).conditions.length : 0) }],
+});
+
+export const limitrangesConfig = namedCoreResource({
+  id: "limitranges",
+  path: "/kubernetes/policy/limit-ranges",
+  title: "LimitRanges",
+  subtitle: "Manage namespace default and maximum compute/storage limits",
+  kind: "LimitRange",
+  namespaced: true,
+  createFields: [
+    { name: "type", label: "Limit Type", section: "Limits", type: "select", defaultValue: "Container", options: [{ label: "Container", value: "Container" }, { label: "Pod", value: "Pod" }, { label: "PersistentVolumeClaim", value: "PersistentVolumeClaim" }] },
+    { name: "defaultCpu", label: "Default CPU", section: "Limits", defaultValue: "500m" },
+    { name: "defaultMemory", label: "Default Memory", section: "Limits", defaultValue: "512Mi" },
+  ],
+  buildResource: (values) => ({ apiVersion: "v1", kind: "LimitRange", metadata: { name: shared.stringValue(values.name, "example-limits"), namespace: shared.stringValue(values.namespace, "default") }, spec: { limits: [{ type: shared.stringValue(values.type, "Container"), default: { cpu: shared.stringValue(values.defaultCpu, "500m"), memory: shared.stringValue(values.defaultMemory, "512Mi") } }] } }),
+  extraColumns: [{ label: "Rules", value: (r) => String(Array.isArray(shared.getRecord(r.spec).limits) ? shared.getRecord(r.spec).limits.length : 0) }],
+});
+
+export const resourcequotasConfig = namedCoreResource({
+  id: "resourcequotas",
+  path: "/kubernetes/policy/resource-quotas",
+  title: "ResourceQuotas",
+  subtitle: "Manage namespace hard resource quotas and usage status",
+  kind: "ResourceQuota",
+  namespaced: true,
+  statusPath: ["status", "hard"],
+  createFields: [{ name: "hard", label: "Hard Limits", section: "Quota", type: "textarea", defaultValue: "pods=10\nrequests.cpu=4\nrequests.memory=8Gi" }],
+  buildResource: (values) => ({ apiVersion: "v1", kind: "ResourceQuota", metadata: { name: shared.stringValue(values.name, "example-quota"), namespace: shared.stringValue(values.namespace, "default") }, spec: { hard: shared.parseKeyValueText(String(values.hard || "")) } }),
+  extraColumns: [{ label: "Hard", value: (r) => String(Object.keys(shared.getRecord(shared.getRecord(r.status).hard || shared.getRecord(r.spec).hard)).length) }, { label: "Used", value: (r) => String(Object.keys(shared.getRecord(shared.getRecord(r.status).used)).length) }],
+});
+
+export const podtemplatesConfig = namedCoreResource({
+  id: "podtemplates",
+  path: "/kubernetes/workloads/pod-templates",
+  title: "PodTemplates",
+  subtitle: "Manage reusable PodTemplate specs",
+  kind: "PodTemplate",
+  namespaced: true,
+  createFields: workloadFields.filter((field) => field.name !== "replicas"),
+  buildResource: (values) => ({ apiVersion: "v1", kind: "PodTemplate", metadata: { name: shared.stringValue(values.name, "example-podtemplate"), namespace: shared.stringValue(values.namespace, "default") }, template: podTemplate(values) }),
+  extraColumns: [{ label: "Containers", value: (r) => String(Array.isArray(shared.getRecord(shared.getRecord((r as any).template).spec).containers) ? shared.getRecord(shared.getRecord((r as any).template).spec).containers.length : 0) }],
+});
+
+export const replicationcontrollersConfig = namedCoreResource({
+  id: "replicationcontrollers",
+  path: "/kubernetes/workloads/replication-controllers",
+  title: "ReplicationControllers",
+  subtitle: "Manage legacy replication controllers and their pod templates",
+  kind: "ReplicationController",
+  namespaced: true,
+  statusPath: ["status", "replicas"],
+  createFields: workloadFields,
+  buildResource: (values) => ({ apiVersion: "v1", kind: "ReplicationController", metadata: { name: shared.stringValue(values.name, "example-rc"), namespace: shared.stringValue(values.namespace, "default") }, spec: { replicas: shared.numberValue(values.replicas, 1), selector: labelsFromValues(values), template: podTemplate(values) } }),
+  extraColumns: [{ label: "Ready", value: (r) => `${shared.getRecord(r.status).readyReplicas || 0} / ${shared.getRecord(r.status).replicas || 0}` }],
+});
+
+export const controllerrevisionsConfig = extensionResource({
+  groupVersion: "apps/v1",
+  id: "controllerrevisions",
+  path: "/kubernetes/workloads/controller-revisions",
+  title: "ControllerRevisions",
+  subtitle: "Inspect controller revision history records",
+  kind: "ControllerRevision",
+  namespaced: true,
+  allowCreate: false,
+  extraColumns: [{ label: "Revision", value: (r) => String((r as any).revision || "N/A") }],
+});
+
+export const leasesConfig = extensionResource({
+  groupVersion: "coordination.k8s.io/v1",
+  id: "leases",
+  path: "/kubernetes/cluster/leases",
+  title: "Leases",
+  subtitle: "Inspect and manage Kubernetes coordination leases",
+  kind: "Lease",
+  namespaced: true,
+  createFields: [{ name: "holderIdentity", label: "Holder Identity", section: "Lease", defaultValue: "" }],
+  buildResource: (values) => ({ apiVersion: "coordination.k8s.io/v1", kind: "Lease", metadata: { name: shared.stringValue(values.name, "example-lease"), namespace: shared.stringValue(values.namespace, "default") }, spec: { holderIdentity: shared.stringValue(values.holderIdentity) } }),
+  extraColumns: [{ label: "Holder", value: (r) => String(shared.getRecord(r.spec).holderIdentity || "N/A") }, { label: "Renew Time", value: (r) => String(shared.getRecord(r.spec).renewTime || "N/A") }],
+});
+
+export const certificatesigningrequestsConfig = extensionResource({
+  groupVersion: "certificates.k8s.io/v1",
+  id: "certificatesigningrequests",
+  path: "/kubernetes/security/certificate-signing-requests",
+  title: "CertificateSigningRequests",
+  subtitle: "Inspect Kubernetes certificate signing requests and approval status",
+  kind: "CertificateSigningRequest",
+  namespaced: false,
+  allowCreate: false,
+  statusPath: ["status", "conditions", "0", "type"],
+  extraColumns: [{ label: "Signer", value: (r) => String(shared.getRecord(r.spec).signerName || "N/A") }, { label: "Username", value: (r) => String(shared.getRecord(r.spec).username || "N/A") }],
+});
+
+const admissionFields = [{ name: "failurePolicy", label: "Failure Policy", section: "Policy", type: "select" as const, defaultValue: "Fail", options: [{ label: "Fail", value: "Fail" }, { label: "Ignore", value: "Ignore" }] }];
+const admissionWebhook = (values: Record<string, string | boolean>) => [{ name: "example.webhook.local", failurePolicy: shared.stringValue(values.failurePolicy, "Fail"), clientConfig: { service: { namespace: "default", name: "webhook-service", path: "/" } }, admissionReviewVersions: ["v1"], sideEffects: "None" }];
+
+export const mutatingwebhookconfigurationsConfig = extensionResource({
+  groupVersion: "admissionregistration.k8s.io/v1",
+  id: "mutatingwebhookconfigurations",
+  path: "/kubernetes/admission/mutating-webhook-configurations",
+  title: "MutatingWebhookConfigurations",
+  subtitle: "Manage mutating admission webhooks",
+  kind: "MutatingWebhookConfiguration",
+  namespaced: false,
+  createFields: admissionFields,
+  buildResource: (values) => ({ apiVersion: "admissionregistration.k8s.io/v1", kind: "MutatingWebhookConfiguration", metadata: { name: shared.stringValue(values.name, "example-mutating-webhook") }, webhooks: admissionWebhook(values) }),
+  extraColumns: [{ label: "Webhooks", value: (r) => String(Array.isArray((r as any).webhooks) ? (r as any).webhooks.length : 0) }],
+});
+
+export const validatingwebhookconfigurationsConfig = extensionResource({
+  groupVersion: "admissionregistration.k8s.io/v1",
+  id: "validatingwebhookconfigurations",
+  path: "/kubernetes/admission/validating-webhook-configurations",
+  title: "ValidatingWebhookConfigurations",
+  subtitle: "Manage validating admission webhooks",
+  kind: "ValidatingWebhookConfiguration",
+  namespaced: false,
+  createFields: admissionFields,
+  buildResource: (values) => ({ apiVersion: "admissionregistration.k8s.io/v1", kind: "ValidatingWebhookConfiguration", metadata: { name: shared.stringValue(values.name, "example-validating-webhook") }, webhooks: admissionWebhook(values) }),
+  extraColumns: [{ label: "Webhooks", value: (r) => String(Array.isArray((r as any).webhooks) ? (r as any).webhooks.length : 0) }],
+});
+
+export const validatingadmissionpoliciesConfig = extensionResource({
+  groupVersion: "admissionregistration.k8s.io/v1",
+  id: "validatingadmissionpolicies",
+  path: "/kubernetes/admission/validating-admission-policies",
+  title: "ValidatingAdmissionPolicies",
+  subtitle: "Manage CEL-based validating admission policies",
+  kind: "ValidatingAdmissionPolicy",
+  namespaced: false,
+  createFields: [{ name: "expression", label: "Validation Expression", section: "Validation", defaultValue: "true" }],
+  buildResource: (values) => ({ apiVersion: "admissionregistration.k8s.io/v1", kind: "ValidatingAdmissionPolicy", metadata: { name: shared.stringValue(values.name, "example-validation-policy") }, spec: { validations: [{ expression: shared.stringValue(values.expression, "true") }] } }),
+  extraColumns: [{ label: "Validations", value: (r) => String(Array.isArray(shared.getRecord(r.spec).validations) ? shared.getRecord(r.spec).validations.length : 0) }],
+});
+
+export const validatingadmissionpolicybindingsConfig = extensionResource({
+  groupVersion: "admissionregistration.k8s.io/v1",
+  id: "validatingadmissionpolicybindings",
+  path: "/kubernetes/admission/validating-admission-policy-bindings",
+  title: "ValidatingAdmissionPolicyBindings",
+  subtitle: "Bind validating admission policies to resources",
+  kind: "ValidatingAdmissionPolicyBinding",
+  namespaced: false,
+  createFields: [{ name: "policyName", label: "Policy Name", section: "Policy", defaultValue: "example-validation-policy" }],
+  buildResource: (values) => ({ apiVersion: "admissionregistration.k8s.io/v1", kind: "ValidatingAdmissionPolicyBinding", metadata: { name: shared.stringValue(values.name, "example-validation-binding") }, spec: { policyName: shared.stringValue(values.policyName, "example-validation-policy"), validationActions: ["Warn"] } }),
+  extraColumns: [{ label: "Policy", value: (r) => String(shared.getRecord(r.spec).policyName || "N/A") }],
+});
+
+export const apiservicesConfig = extensionResource({
+  groupVersion: "apiregistration.k8s.io/v1",
+  id: "apiservices",
+  path: "/kubernetes/cluster/api-services",
+  title: "APIServices",
+  subtitle: "Inspect aggregated Kubernetes API services",
+  kind: "APIService",
+  namespaced: false,
+  allowCreate: false,
+  statusPath: ["status", "conditions", "0", "type"],
+  extraColumns: [{ label: "Service", value: (r) => `${shared.getRecord(shared.getRecord(r.spec).service).namespace || ""}/${shared.getRecord(shared.getRecord(r.spec).service).name || ""}` }, { label: "Group", value: (r) => String(shared.getRecord(r.spec).group || "core") }],
+});
+
+export const flowschemasConfig = extensionResource({
+  groupVersion: "flowcontrol.apiserver.k8s.io/v1",
+  id: "flowschemas",
+  path: "/kubernetes/flow-control/flow-schemas",
+  title: "FlowSchemas",
+  subtitle: "Manage API priority and fairness flow schemas",
+  kind: "FlowSchema",
+  namespaced: false,
+  allowCreate: false,
+  statusPath: ["status", "conditions", "0", "type"],
+  extraColumns: [{ label: "Priority Level", value: (r) => String(shared.getRecord(shared.getRecord(r.spec).priorityLevelConfiguration).name || "N/A") }],
+});
+
+export const prioritylevelconfigurationsConfig = extensionResource({
+  groupVersion: "flowcontrol.apiserver.k8s.io/v1",
+  id: "prioritylevelconfigurations",
+  path: "/kubernetes/flow-control/priority-level-configurations",
+  title: "PriorityLevelConfigurations",
+  subtitle: "Manage API priority and fairness priority levels",
+  kind: "PriorityLevelConfiguration",
+  namespaced: false,
+  allowCreate: false,
+  statusPath: ["status", "conditions", "0", "type"],
+  extraColumns: [{ label: "Type", value: (r) => String(shared.getRecord(r.spec).type || "N/A") }],
+});
+
+export const runtimeclassesConfig = extensionResource({
+  groupVersion: "node.k8s.io/v1",
+  id: "runtimeclasses",
+  path: "/kubernetes/cluster/runtime-classes",
+  title: "RuntimeClasses",
+  subtitle: "Manage container runtime class handlers",
+  kind: "RuntimeClass",
+  namespaced: false,
+  createFields: [{ name: "handler", label: "Handler", section: "Runtime", defaultValue: "runc" }],
+  buildResource: (values) => ({ apiVersion: "node.k8s.io/v1", kind: "RuntimeClass", metadata: { name: shared.stringValue(values.name, "example-runtimeclass") }, handler: shared.stringValue(values.handler, "runc") }),
+  extraColumns: [{ label: "Handler", value: (r) => String((r as any).handler || "N/A") }],
+});
+
+export const priorityclassesConfig = extensionResource({
+  groupVersion: "scheduling.k8s.io/v1",
+  id: "priorityclasses",
+  path: "/kubernetes/cluster/priority-classes",
+  title: "PriorityClasses",
+  subtitle: "Manage pod scheduling priority classes",
+  kind: "PriorityClass",
+  namespaced: false,
+  createFields: [{ name: "value", label: "Priority Value", section: "Priority", type: "number", defaultValue: "1000" }, { name: "globalDefault", label: "Global Default", section: "Priority", type: "checkbox", defaultValue: false }],
+  buildResource: (values) => ({ apiVersion: "scheduling.k8s.io/v1", kind: "PriorityClass", metadata: { name: shared.stringValue(values.name, "example-priority") }, value: shared.numberValue(values.value, 1000), globalDefault: values.globalDefault === true }),
+  extraColumns: [{ label: "Value", value: (r) => String((r as any).value || 0) }, { label: "Default", value: (r) => String((r as any).globalDefault || false) }],
+});
