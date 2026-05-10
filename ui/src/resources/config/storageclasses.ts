@@ -41,9 +41,9 @@ export const storageclassesConfig: ResourceConfig = {
     statusPath: ["provisioner"],
     detailSections: shared.storageClassDetailSections,
     extraColumns: [
-      { label: "Provisioner", value: (r) => String((r as any).provisioner || "N/A") },
-      { label: "Binding Mode", value: (r) => String((r as any).volumeBindingMode || "N/A") },
-      { label: "Reclaim", value: (r) => String((r as any).reclaimPolicy || "N/A") },
+      { label: "Provisioner", value: (r) => String(shared.getRecord(r).provisioner || "N/A") },
+      { label: "Binding Mode", value: (r) => String(shared.getRecord(r).volumeBindingMode || "N/A") },
+      { label: "Reclaim", value: (r) => String(shared.getRecord(r).reclaimPolicy || "N/A") },
     ],
     createTemplate: `apiVersion: storage.k8s.io/v1
 kind: StorageClass

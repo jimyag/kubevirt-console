@@ -14,7 +14,7 @@ export const endpointsConfig: ResourceConfig = {
     allowDelete: false,
     statusPath: ["subsets", "0", "addresses", "0", "ip"],
     detailSections: shared.kubernetesEndpointsDetailSections,
-    extraColumns: [{ label: "Subsets", value: (r) => String(((r as any).subsets as unknown[] | undefined)?.length || 0) }],
+    extraColumns: [{ label: "Subsets", value: (r) => String((shared.getRecord(r).subsets as unknown[] | undefined)?.length || 0) }],
     createTemplate: `apiVersion: v1
 kind: Endpoints
 metadata:

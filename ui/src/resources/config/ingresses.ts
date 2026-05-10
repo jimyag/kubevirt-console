@@ -46,7 +46,7 @@ export const ingressesConfig: ResourceConfig = {
     detailSections: shared.kubernetesIngressDetailSections,
     extraColumns: [
       { label: "Class", value: (r) => String(shared.getRecord(r.spec).ingressClassName || "N/A") },
-      { label: "Hosts", value: (r) => (Array.isArray(shared.getRecord(r.spec).rules) ? shared.getRecord(r.spec).rules.map((rule: any) => rule.host).filter(Boolean).join(", ") : "") || "N/A" },
+      { label: "Hosts", value: (r) => (Array.isArray(shared.getRecord(r.spec).rules) ? (shared.getRecord(r.spec).rules as Record<string, unknown>[]).map((rule) => rule.host).filter(Boolean).join(", ") : "") || "N/A" },
     ],
     createTemplate: `apiVersion: networking.k8s.io/v1
 kind: Ingress

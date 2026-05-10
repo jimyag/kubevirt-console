@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react"
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react"
 import { Link, useNavigate, useParams } from "react-router-dom"
 import * as YAML from "js-yaml"
 import {
@@ -2109,7 +2109,7 @@ export function ResourceList({ config }: { config: ResourceConfig }) {
     }
   }, [config.id, config.namespaced])
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true)
     setError("")
     try {
@@ -2135,11 +2135,11 @@ export function ResourceList({ config }: { config: ResourceConfig }) {
     } finally {
       setLoading(false)
     }
-  }
+  }, [config, namespaceFilter])
 
   useEffect(() => {
     load()
-  }, [config.id, namespaceFilter])
+  }, [load])
 
   const filtered = useMemo(() => {
     const needle = search.toLowerCase()
@@ -2528,7 +2528,7 @@ export function ResourceManifest({ config }: { config: ResourceConfig }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true)
     setError("")
     try {
@@ -2551,11 +2551,11 @@ export function ResourceManifest({ config }: { config: ResourceConfig }) {
     } finally {
       setLoading(false)
     }
-  }
+  }, [config, name, namespace])
 
   useEffect(() => {
     load()
-  }, [config, name, namespace])
+  }, [load])
 
   if (loading) {
     return (

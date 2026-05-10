@@ -39,7 +39,7 @@ export const csinodesConfig: ResourceConfig = {
     detailSections: shared.csiNodeDetailSections,
     extraColumns: [
       { label: "Drivers", value: (r) => String((shared.getRecord(r.spec).drivers as unknown[] | undefined)?.length || 0) },
-      { label: "First Driver", value: (r) => String(((shared.getRecord(r.spec).drivers as any[] | undefined)?.[0]?.name) || "N/A") },
+      { label: "First Driver", value: (r) => String(((shared.getRecord(r.spec).drivers as Record<string, unknown>[] | undefined)?.[0]?.name) || "N/A") },
     ],
     createTemplate: `apiVersion: storage.k8s.io/v1
 kind: CSINode

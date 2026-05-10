@@ -27,8 +27,8 @@ export const volumeattributesclassesConfig: ResourceConfig = {
     statusPath: ["driverName"],
     detailSections: shared.volumeAttributesClassDetailSections,
     extraColumns: [
-      { label: "Driver", value: (r) => String((r as any).driverName || "N/A") },
-      { label: "Parameters", value: (r) => String(Object.keys(shared.getRecord((r as any).parameters)).length) },
+      { label: "Driver", value: (r) => String(shared.getRecord(r).driverName || "N/A") },
+      { label: "Parameters", value: (r) => String(Object.keys(shared.getRecord(shared.getRecord(r).parameters)).length) },
     ],
     createTemplate: `apiVersion: storage.k8s.io/v1
 kind: VolumeAttributesClass

@@ -29,8 +29,8 @@ export const volumesnapshotclassesConfig: ResourceConfig = {
     statusPath: ["driver"],
     detailSections: shared.volumeSnapshotClassDetailSections,
     extraColumns: [
-      { label: "Driver", value: (r) => String((r as any).driver || "N/A") },
-      { label: "Deletion", value: (r) => String((r as any).deletionPolicy || "N/A") },
+      { label: "Driver", value: (r) => String(shared.getRecord(r).driver || "N/A") },
+      { label: "Deletion", value: (r) => String(shared.getRecord(r).deletionPolicy || "N/A") },
     ],
     createTemplate: `apiVersion: snapshot.storage.k8s.io/v1
 kind: VolumeSnapshotClass

@@ -1,12 +1,22 @@
 import { useState, useEffect, useRef } from "react";
 import { Maximize2, Minimize2, ShieldAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
-// @ts-ignore
 import RFB from "../vendor/novnc.all.js";
+
+type RfbClient = {
+  scaleViewport: boolean;
+  resizeSession: boolean;
+  focusOnClick: boolean;
+  sendCtrlAltDel: () => void;
+  disconnect: () => void;
+  addEventListener: (type: "connect" | "disconnect", listener: (event: Event & { detail?: { clean?: boolean } }) => void) => void;
+}
+
+type RfbConstructor = new (target: HTMLElement, url: string, options?: { wsProtocols?: string[] }) => RfbClient;
 
 export function VncConsole({ namespace, name }: { namespace: string, name: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const rfbRef = useRef<any>(null);
+  const rfbRef = useRef<RfbClient | null>(null);
   const [isTheaterMode, setIsTheaterMode] = useState(false);
   const [status, setStatus] = useState<"connecting" | "connected" | "disconnected" | "error">("connecting");
   const [errorMsg, setErrorMsg] = useState("");
@@ -24,21 +34,22 @@ export function VncConsole({ namespace, name }: { namespace: string, name: strin
 
   useEffect(() => {
     if (!containerRef.current) return;
-    let rfb: any = null;
+    let rfb: RfbClient | null = null;
     const startVnc = () => {
       try {
         const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
         const ctx = localStorage.getItem("kube-context") || "";
         const wsUrl = `${protocol}//${window.location.host}/api/v1/ws?namespace=${namespace}&vmi=${name}&type=vnc&context=${ctx}`;
         setStatus("connecting");
-        const RFBC = (RFB as any).default || RFB;
+        const moduleValue = RFB as { default?: unknown };
+        const RFBC = (moduleValue.default || RFB) as RfbConstructor;
         if (typeof RFBC !== "function") { setErrorMsg("VNC 引擎载入失败：找不到有效的构造函数。"); setStatus("error"); return; }
         rfb = new RFBC(containerRef.current!, wsUrl, { wsProtocols: ["binary"] });
         rfb.scaleViewport = true; rfb.resizeSession = true; rfb.focusOnClick = true;
         rfb.addEventListener("connect", () => setStatus("connected"));
-        rfb.addEventListener("disconnect", (e: any) => { setStatus("disconnected"); if (e.detail && e.detail.clean === false) { setStatus("error"); setErrorMsg("VNC 连接异常中断"); } });
+        rfb.addEventListener("disconnect", (e) => { setStatus("disconnected"); if (e.detail && e.detail.clean === false) { setStatus("error"); setErrorMsg("VNC 连接异常中断"); } });
         rfbRef.current = rfb;
-      } catch (e: any) { setStatus("error"); setErrorMsg(e.message || "本地 VNC 引擎初始化失败"); }
+      } catch (e) { setStatus("error"); setErrorMsg(e instanceof Error ? e.message : "本地 VNC 引擎初始化失败"); }
     };
     startVnc(); return () => { if (rfb) rfb.disconnect(); };
   }, [namespace, name]);

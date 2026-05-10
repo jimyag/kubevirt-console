@@ -1,13 +1,13 @@
 import type { DetailSection } from "@/components/resource-management"
 
 type KubeLikeResource = {
-  metadata?: Record<string, any>
-  spec?: Record<string, any>
-  status?: Record<string, any>
-  [key: string]: any
+  metadata?: Record<string, unknown>
+  spec?: Record<string, unknown>
+  status?: Record<string, unknown>
+  [key: string]: unknown
 }
 
-const getRecord = (value: unknown) => (value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {})
+const getRecord = (value: unknown) => (value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {})
 const joinList = (value: unknown) => Array.isArray(value) ? value.filter(Boolean).join(", ") : ""
 
 const conditions = (value: unknown) => {
@@ -21,7 +21,7 @@ const conditions = (value: unknown) => {
   }))
 }
 
-const volumeSource = (spec: Record<string, any>) => {
+const volumeSource = (spec: Record<string, unknown>) => {
   const sourceKeys = [
     "awsElasticBlockStore",
     "azureDisk",

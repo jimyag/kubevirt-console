@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useCallback, useState, useEffect, useMemo } from "react";
 import { BrowserRouter, Routes, Route, Link, useParams, useNavigate, Navigate } from "react-router-dom";
 import {
   Cpu, Terminal, ChevronLeft, FileCode, Info, Network, HardDrive,
@@ -41,13 +41,18 @@ import {
 } from "./components/ui/table";
 
 interface ResourceMetadata { name: string; namespace: string; uid: string; creationTimestamp: string; labels?: Record<string, string>; annotations?: Record<string, string>; }
-interface VM { metadata: ResourceMetadata; spec: { running?: boolean; runStrategy?: string; template?: { metadata?: { labels?: Record<string, string>; annotations?: Record<string, string>; }; spec?: { architecture?: string; domain?: { machine?: { type?: string }; cpu?: { cores?: number, sockets?: number, threads?: number }; resources?: { requests?: { cpu?: string, memory?: string } }; devices?: { interfaces?: Array<{ name: string, model?: string }> }; }; networks?: Array<{ name: string, pod?: any }>; volumes?: Array<{ name: string, dataVolume?: { name: string } }>; }; }; }; status?: { printableStatus?: string; conditions?: Array<{ type: string; status: string; message?: string; reason?: string }>; }; }
+type UnknownRecord = Record<string, unknown>;
+interface VmDisk { name?: string; bootOrder?: number; disk?: UnknownRecord; cdrom?: UnknownRecord; lun?: UnknownRecord }
+interface VmVolume { name: string; dataVolume?: { name: string }; persistentVolumeClaim?: { claimName?: string }; containerDisk?: { image?: string }; cloudInitNoCloud?: UnknownRecord }
+interface VM { metadata: ResourceMetadata; spec: { running?: boolean; runStrategy?: string; instancetype?: { name?: string }; template?: { metadata?: { labels?: Record<string, string>; annotations?: Record<string, string>; }; spec?: { architecture?: string; priorityClassName?: string; domain?: { machine?: { type?: string }; cpu?: { cores?: number, sockets?: number, threads?: number }; resources?: { requests?: { cpu?: string, memory?: string } }; devices?: { interfaces?: Array<{ name: string, model?: string }>; disks?: VmDisk[] }; }; networks?: Array<{ name: string, pod?: unknown }>; volumes?: VmVolume[]; }; }; }; status?: { printableStatus?: string; conditions?: Array<{ type: string; status: string; message?: string; reason?: string }>; }; }
 interface VMI { metadata: ResourceMetadata; status: { phase: string; interfaces?: Array<{ ipAddress?: string; name: string }>; nodeName?: string }; }
-interface DV { metadata: ResourceMetadata; status?: { phase: string; progress?: string; claimName?: string; conditions?: Array<{ type: string; status: string; message?: string; reason?: string }>; }; spec: { storage?: { resources?: { requests?: { storage?: string } } }; pvc?: { resources?: { requests?: { storage?: string } } }; source?: Record<string, any>; }; }
+interface DVStorageSpec { storageClassName?: string; accessModes?: string[]; volumeMode?: string; resources?: { requests?: { storage?: string } } }
+interface DV { metadata: ResourceMetadata; status?: { phase: string; progress?: string; claimName?: string; conditions?: Array<{ type: string; status: string; message?: string; reason?: string }>; }; spec: { storage?: DVStorageSpec; pvc?: DVStorageSpec; source?: Record<string, unknown>; }; }
 interface K8sNode { metadata: ResourceMetadata; status: { capacity: Record<string, string>; allocatable: Record<string, string>; conditions: Array<{ type: string; status: string }>; }; spec: { unschedulable?: boolean }; }
 interface K8sPod { metadata: ResourceMetadata; status: { phase: string; containerStatuses?: Array<{ ready: boolean; restartCount: number }>; }; }
 interface K8sEvent { metadata: ResourceMetadata; involvedObject: { kind: string; name: string; namespace: string; uid: string; }; reason: string; message: string; type: string; lastTimestamp: string; count: number; }
 interface MetricPoint { time: string; timestamp: number; cpuUsage: number; memoryUsage: number; }
+interface DeploymentSummary { spec?: { replicas?: number }; status?: { readyReplicas?: number } }
 
 // --- Utils ---
 const getContext = () => localStorage.getItem("kube-context") || "";
@@ -58,6 +63,9 @@ const apiFetch = (url: string, options: RequestInit = {}) => {
 };
 const parseStorage = (s?: string): number => { if (!s) return 0; const num = parseFloat(s); if (s.endsWith("Ti")) return num * 1024; if (s.endsWith("Gi")) return num; if (s.endsWith("Mi")) return num / 1024; return num / (1024 * 1024); };
 const formatStorage = (gi: number): string => gi >= 1024 ? `${(gi / 1024).toFixed(1)}Ti` : `${gi.toFixed(1)}Gi`;
+const asRecord = (value: unknown): UnknownRecord => value && typeof value === "object" && !Array.isArray(value) ? value as UnknownRecord : {};
+const namedApiGroup = (group: unknown): group is { name: string } => asRecord(group).name !== undefined;
+const isVm = (value: unknown): value is VM => Boolean(asRecord(value).metadata && asRecord(value).spec);
 const vmPodSelectors = (name: string): Array<Record<string, string>> => [
   { "vm.kubevirt.io/name": name },
   { "vmi.kubevirt.io/id": name },
@@ -133,7 +141,7 @@ function VmActionDialog({
 
   useEffect(() => {
     if (open) setValues(Object.fromEntries(fields.map((field) => [field.name, field.defaultValue])));
-  }, [open]);
+  }, [fields, open]);
 
   const submit = async () => {
     setSaving(true);
@@ -202,7 +210,7 @@ function VmActionDialog({
 // --- Main Views ---
 function VMList() {
   const [vms, setVms] = useState<VM[]>([]); const [loading, setLoading] = useState(true); const [nss, setNss] = useState<string[]>(["all", "default"]); const [availableS, setAvailableS] = useState<string[]>(["all"]); const [sT, setST] = useState(""); const [nF, setNF] = useState("default"); const [sF, setSF] = useState("all");
-  const fetchVms = async () => { setLoading(true); try { const res = await apiFetch(`/api/v1/vms?name=${sT}&status=${sF}&namespace=${nF}`); const data = await res.json(); setVms(data.items || []); } finally { setLoading(false); } };
+  const fetchVms = useCallback(async () => { setLoading(true); try { const res = await apiFetch(`/api/v1/vms?name=${sT}&status=${sF}&namespace=${nF}`); const data = await res.json(); setVms(data.items || []); } finally { setLoading(false); } }, [nF, sF, sT]);
   const deleteVmRequest = (vm: VM) => ({
     url: `/apis/kubevirt.io/v1/namespaces/${vm.metadata.namespace}/virtualmachines/${vm.metadata.name}`,
     options: { method: "DELETE", headers: { Accept: "application/json" } },
@@ -215,7 +223,7 @@ function VMList() {
     });
     apiFetch("/api/v1/vm-statuses").then(r => r.json()).then(setAvailableS);
   }, []);
-  useEffect(() => { const timer = setTimeout(fetchVms, 300); return () => clearTimeout(timer); }, [sT, nF, sF]);
+  useEffect(() => { const timer = setTimeout(fetchVms, 300); return () => clearTimeout(timer); }, [fetchVms]);
   return (
     <div className="space-y-4 animate-in fade-in duration-500">
       <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
@@ -312,14 +320,14 @@ function VMList() {
 
 function DVList() {
   const [dvs, setDvs] = useState<DV[]>([]); const [loading, setLoading] = useState(true); const [searchTerm, setSearchTerm] = useState(""); const [nss, setNss] = useState<string[]>(["all", "default"]); const [namespaceFilter, setNamespaceFilter] = useState("default");
-  const loadDvs = async () => {
+  const loadDvs = useCallback(async () => {
     setLoading(true);
     try {
       const path = namespaceFilter === "all" ? "/apis/cdi.kubevirt.io/v1beta1/datavolumes" : `/apis/cdi.kubevirt.io/v1beta1/namespaces/${namespaceFilter}/datavolumes`;
       const data = await apiFetch(path).then(r => r.json());
       setDvs(data.items || []);
     } finally { setLoading(false); }
-  };
+  }, [namespaceFilter]);
   useEffect(() => {
     apiFetch("/api/v1/namespaces-list").then(r => r.json()).then((data) => {
       const next = Array.from(new Set(["all", ...(data || []).filter(Boolean)]));
@@ -327,7 +335,7 @@ function DVList() {
       setNamespaceFilter((current) => current && next.includes(current) ? current : next.includes("default") ? "default" : next.find((ns) => ns !== "all") || "all");
     });
   }, []);
-  useEffect(() => { loadDvs(); }, [namespaceFilter]);
+  useEffect(() => { loadDvs(); }, [loadDvs]);
   const filtered = dvs.filter(dv => {
     const needle = searchTerm.toLowerCase();
     return dv.metadata.name.toLowerCase().includes(needle) || dv.metadata.namespace.toLowerCase().includes(needle);
@@ -408,7 +416,7 @@ function DVList() {
 }
 
 function DashboardOverview() {
-  const [data, setData] = useState<{ vms: VM[], vmis: VMI[], dvs: DV[], nodes: K8sNode[], kvPods: K8sPod[], pods: K8sPod[], deployments: any[], services: any[], namespaces: any[], events: K8sEvent[], loading: boolean }>({ vms: [], vmis: [], dvs: [], nodes: [], kvPods: [], pods: [], deployments: [], services: [], namespaces: [], events: [], loading: true });
+  const [data, setData] = useState<{ vms: VM[], vmis: VMI[], dvs: DV[], nodes: K8sNode[], kvPods: K8sPod[], pods: K8sPod[], deployments: DeploymentSummary[], services: unknown[], namespaces: unknown[], events: K8sEvent[], loading: boolean }>({ vms: [], vmis: [], dvs: [], nodes: [], kvPods: [], pods: [], deployments: [], services: [], namespaces: [], events: [], loading: true });
   useEffect(() => {
     const load = async () => {
       try {
@@ -426,7 +434,7 @@ function DashboardOverview() {
           loadJson("/api/v1/events"),
         ]);
         setData({ vms: vmsR.items || [], vmis: vmisR.items || [], dvs: dvsR.items || [], nodes: nodesR.items || [], kvPods: kvPodsR.items || [], pods: podsR.items || [], deployments: deploymentsR.items || [], services: servicesR.items || [], namespaces: namespacesR.items || [], events: eventsR.items || [], loading: false });
-      } catch (e) { setData(prev => ({ ...prev, loading: false })); }
+      } catch { setData(prev => ({ ...prev, loading: false })); }
     }; load();
   }, []);
   const nodeStats = useMemo(() => { const total = data.nodes.length; const unschedulable = data.nodes.filter(n => n.spec.unschedulable).length; const ready = data.nodes.filter(n => n.status.conditions.some(c => c.type === "Ready" && c.status === "True")).length; return { total, unschedulable, ready }; }, [data.nodes]);
@@ -643,17 +651,17 @@ function DashboardOverview() {
 function VMDetailContent() {
   const { namespace, name, tab } = useParams(); const navigate = useNavigate(); const [vm, setVm] = useState<VM | null>(null); const [vmi, setVmi] = useState<VMI | null>(null); const [vmYaml, setVmYaml] = useState(""); const [associatedDVs, setAssociatedDVs] = useState<DV[]>([]); const [events, setEvents] = useState<K8sEvent[]>([]); const [metrics, setMetrics] = useState<MetricPoint[]>([]); const [loading, setLoading] = useState(true); const [mStrategy, setMStrategy] = useState<string | null>(null);
   const activeTab = tab === "yaml" ? "manifest" : tab || "overview";
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       const [vmRes, vmiRes, yamlRes, eventsRes] = await Promise.all([ apiFetch(`/apis/kubevirt.io/v1/namespaces/${namespace}/virtualmachines/${name}`), apiFetch(`/apis/kubevirt.io/v1/namespaces/${namespace}/virtualmachineinstances/${name}`), apiFetch(`/api/v1/yaml/virtualmachines/${namespace}/${name}`), apiFetch(`/api/v1/namespaces/${namespace}/events?fieldSelector=involvedObject.name=${name}`) ]);
-      const vmData = vmRes.ok ? await vmRes.json() : null; setVm(vmData); if (vmiRes.ok) setVmi(await vmiRes.json()); if (yamlRes.ok) setVmYaml(await yamlRes.text()); if (eventsRes.ok) setEvents((await eventsRes.json()).items || []);
-      let strat = mStrategy; if (strat === null) { const apisRes = await apiFetch("/apis"); if (apisRes.ok) { strat = (await apisRes.json()).groups?.some((g:any) => g.name === "metrics.kubevirt.io") ? "vmi" : "pod"; setMStrategy(strat); } }
+      const rawVmData: unknown = vmRes.ok ? await vmRes.json() : null; const vmData = isVm(rawVmData) ? rawVmData : null; setVm(vmData); if (vmiRes.ok) setVmi(await vmiRes.json()); if (yamlRes.ok) setVmYaml(await yamlRes.text()); if (eventsRes.ok) setEvents((await eventsRes.json()).items || []);
+      let strat = mStrategy; if (strat === null) { const apisRes = await apiFetch("/apis"); if (apisRes.ok) { strat = (await apisRes.json()).groups?.some((g: unknown) => namedApiGroup(g) && g.name === "metrics.kubevirt.io") ? "vmi" : "pod"; setMStrategy(strat); } }
       if (strat === "vmi") { const m = await apiFetch(`/apis/metrics.kubevirt.io/v1beta1/namespaces/${namespace}/virtualmachineinstances/${name}`); if (m.ok) { const d = await m.json(); setMetrics(p => [...p.slice(-19), { timestamp: Date.now(), time: new Date().toISOString(), cpuUsage: d.status?.cpu?.usageCores || 0, memoryUsage: (d.status?.memory?.usageBytes || 0) / (1024 * 1024) }]); } }
       else if (strat === "pod") { const pod = await findVmPod(namespace!, name!); if (pod) { const pm = await apiFetch(`/apis/metrics.k8s.io/v1beta1/namespaces/${namespace}/pods/${pod.metadata.name}`); if (pm.ok) { const d = await pm.json(); const cpu = d.containers?.[0]?.usage?.cpu || "0n"; const mem = d.containers?.[0]?.usage?.memory || "0Ki"; const pCpu = (c:string) => c.endsWith("n") ? parseInt(c)/1e9 : c.endsWith("u") ? parseInt(c)/1e6 : c.endsWith("m") ? parseInt(c)/1e3 : parseInt(c); const pMem = (m:string) => m.endsWith("Ki") ? parseInt(m)/1024 : m.endsWith("Mi") ? parseInt(m) : m.endsWith("Gi") ? parseInt(m)*1024 : parseInt(m)/(1024*1024); setMetrics(p => [...p.slice(-19), { timestamp: Date.now(), time: new Date().toISOString(), cpuUsage: pCpu(cpu), memoryUsage: pMem(mem) }]); } } }
-      if (vmData?.spec.template?.spec?.volumes) { const dns = vmData.spec.template.spec.volumes.filter((v:any) => v.dataVolume).map((v:any) => v.dataVolume.name); if (dns.length > 0) { const ds = await Promise.all(dns.map((dn:string) => apiFetch(`/apis/cdi.kubevirt.io/v1beta1/namespaces/${namespace}/datavolumes/${dn}`).then(r => r.ok ? r.json() : null))); setAssociatedDVs(ds.filter(d => d !== null)); } }
+      if (vmData?.spec.template?.spec?.volumes) { const dns = vmData.spec.template.spec.volumes.filter((v) => v.dataVolume).map((v) => v.dataVolume!.name); if (dns.length > 0) { const ds = await Promise.all(dns.map((dn:string) => apiFetch(`/apis/cdi.kubevirt.io/v1beta1/namespaces/${namespace}/datavolumes/${dn}`).then(r => r.ok ? r.json() : null))); setAssociatedDVs(ds.filter(d => d !== null)); } }
     } finally { setLoading(false); }
-  };
-  useEffect(() => { fetchData(); const t = setInterval(fetchData, 5000); return () => clearInterval(t); }, [namespace, name]);
+  }, [mStrategy, name, namespace]);
+  useEffect(() => { fetchData(); const t = setInterval(fetchData, 5000); return () => clearInterval(t); }, [fetchData]);
   const handleAction = async (a:string) => {
     if (a === "pause" || a === "unpause") {
       await apiFetch(`/apis/subresources.kubevirt.io/v1/namespaces/${namespace}/virtualmachineinstances/${name}/${a}`, jsonPut());
@@ -761,14 +769,14 @@ function VMDetailContent() {
           <VmActionDialog
             label="Instance Type"
             description="Patch spec.instancetype.name on this VirtualMachine."
-            fields={[{ name: "instanceType", label: "Cluster Instance Type", defaultValue: String((vm.spec as any).instancetype?.name || "") }]}
+            fields={[{ name: "instanceType", label: "Cluster Instance Type", defaultValue: String(vm.spec.instancetype?.name || "") }]}
             buildRequest={(values) => ({ url: vmPatchUrl, options: mergePatch({ spec: { instancetype: { name: stringValue(values.instanceType) } } }) })}
             onDone={fetchData}
           />
           <VmActionDialog
             label="Priority Class"
             description="Patch template priorityClassName on this VirtualMachine."
-            fields={[{ name: "priorityClassName", label: "Priority Class Name", defaultValue: String((vm.spec.template?.spec as any)?.priorityClassName || "") }]}
+            fields={[{ name: "priorityClassName", label: "Priority Class Name", defaultValue: String(vm.spec.template?.spec?.priorityClassName || "") }]}
             buildRequest={(values) => ({ url: vmPatchUrl, options: mergePatch({ spec: { template: { spec: { priorityClassName: stringValue(values.priorityClassName) } } } }) })}
             onDone={fetchData}
           />
@@ -925,7 +933,7 @@ function VMDetailContent() {
                 <CardContent className="space-y-2 text-sm">
                   <div className="flex justify-between gap-4">
                     <span className="text-muted-foreground">Priority Class</span>
-                    <span className="font-medium">{(vm.spec.template?.spec as any)?.priorityClassName || "N/A"}</span>
+                    <span className="font-medium">{vm.spec.template?.spec?.priorityClassName || "N/A"}</span>
                   </div>
                   <div className="flex justify-between gap-4">
                     <span className="text-muted-foreground">Architecture</span>
@@ -1068,7 +1076,7 @@ function VMDetailContent() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-2">
-                    {((vm.spec.template?.spec?.domain?.devices as any)?.disks || []).map((disk: any) => (
+                    {(vm.spec.template?.spec?.domain?.devices?.disks || []).map((disk) => (
                       <div key={disk.name} className="grid gap-1 rounded-lg border bg-muted/30 p-3 text-sm">
                         <div className="font-medium">{disk.name}</div>
                         <div className="text-xs text-muted-foreground">
@@ -1077,7 +1085,7 @@ function VMDetailContent() {
                         </div>
                       </div>
                     ))}
-                    {(((vm.spec.template?.spec?.domain?.devices as any)?.disks || []).length === 0) && <p className="text-sm text-muted-foreground">No disks declared</p>}
+                    {((vm.spec.template?.spec?.domain?.devices?.disks || []).length === 0) && <p className="text-sm text-muted-foreground">No disks declared</p>}
                   </div>
                 </CardContent>
               </ShadCard>
@@ -1091,7 +1099,7 @@ function VMDetailContent() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-2">
-                    {(vm.spec.template?.spec?.volumes || []).map((volume: any) => (
+                    {(vm.spec.template?.spec?.volumes || []).map((volume) => (
                       <div key={volume.name} className="grid gap-1 rounded-lg border bg-muted/30 p-3 text-sm">
                         <div className="font-medium">{volume.name}</div>
                         <div className="text-xs text-muted-foreground">{Object.keys(volume).filter((key) => key !== "name").join(", ") || "volume"}</div>
@@ -1111,7 +1119,7 @@ function VMDetailContent() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-2">
-                    {(vm.spec.template?.spec?.domain?.devices?.interfaces || []).map((i: any) => (
+                    {(vm.spec.template?.spec?.domain?.devices?.interfaces || []).map((i) => (
                       <div key={i.name} className="grid gap-1 text-sm p-3 bg-muted/30 rounded-lg border">
                         <div className="flex items-center justify-between gap-4">
                           <span className="font-medium">{i.name}</span>
@@ -1196,14 +1204,14 @@ function VMDetailContent() {
 
 function DVDetailContent() {
   const { namespace, name, tab } = useParams(); const navigate = useNavigate(); const [dv, setDv] = useState<DV | null>(null); const [dvYaml, setDvYaml] = useState(""); const [loading, setLoading] = useState(true); const activeTab = tab === "yaml" ? "manifest" : tab || "overview";
-  const loadDv = async () => {
+  const loadDv = useCallback(async () => {
     setLoading(true);
     try {
       const [r, y] = await Promise.all([apiFetch(`/apis/cdi.kubevirt.io/v1beta1/namespaces/${namespace}/datavolumes/${name}`), apiFetch(`/api/v1/yaml/datavolumes/${namespace}/${name}`)]);
       if (r.ok) setDv(await r.json()); if (y.ok) setDvYaml(await y.text());
     } finally { setLoading(false); }
-  };
-  useEffect(() => { loadDv(); }, [namespace, name]);
+  }, [name, namespace]);
+  useEffect(() => { loadDv(); }, [loadDv]);
 
   if (loading) return (
     <div className="flex items-center justify-center h-64 gap-2">
@@ -1329,15 +1337,15 @@ function DVDetailContent() {
                 <CardContent className="space-y-2 text-sm">
                   <div className="flex justify-between gap-4">
                     <span className="text-muted-foreground">Storage Class</span>
-                    <span className="font-medium">{(dv.spec.storage as any)?.storageClassName || (dv.spec.pvc as any)?.storageClassName || "default"}</span>
+                    <span className="font-medium">{dv.spec.storage?.storageClassName || dv.spec.pvc?.storageClassName || "default"}</span>
                   </div>
                   <div className="flex justify-between gap-4">
                     <span className="text-muted-foreground">Access Modes</span>
-                    <span className="font-medium">{(dv.spec.storage as any)?.accessModes?.join(", ") || (dv.spec.pvc as any)?.accessModes?.join(", ") || "N/A"}</span>
+                    <span className="font-medium">{dv.spec.storage?.accessModes?.join(", ") || dv.spec.pvc?.accessModes?.join(", ") || "N/A"}</span>
                   </div>
                   <div className="flex justify-between gap-4">
                     <span className="text-muted-foreground">Volume Mode</span>
-                    <span className="font-medium">{(dv.spec.storage as any)?.volumeMode || (dv.spec.pvc as any)?.volumeMode || "N/A"}</span>
+                    <span className="font-medium">{dv.spec.storage?.volumeMode || dv.spec.pvc?.volumeMode || "N/A"}</span>
                   </div>
                   <div className="flex justify-between gap-4">
                     <span className="text-muted-foreground">Claim</span>

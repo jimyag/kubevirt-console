@@ -37,9 +37,9 @@ export const csistoragecapacitiesConfig: ResourceConfig = {
     statusPath: ["storageClassName"],
     detailSections: shared.csiStorageCapacityDetailSections,
     extraColumns: [
-      { label: "Storage Class", value: (r) => String((r as any).storageClassName || "N/A") },
-      { label: "Capacity", value: (r) => String((r as any).capacity || "N/A") },
-      { label: "Max Volume", value: (r) => String((r as any).maximumVolumeSize || "N/A") },
+      { label: "Storage Class", value: (r) => String(shared.getRecord(r).storageClassName || "N/A") },
+      { label: "Capacity", value: (r) => String(shared.getRecord(r).capacity || "N/A") },
+      { label: "Max Volume", value: (r) => String(shared.getRecord(r).maximumVolumeSize || "N/A") },
     ],
     createTemplate: `apiVersion: storage.k8s.io/v1beta1
 kind: CSIStorageCapacity

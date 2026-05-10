@@ -27,7 +27,7 @@ export const nodesConfig: ResourceConfig = {
           title: "Node Status",
           items: [
             { label: "Conditions", value: conditions },
-            { label: "Addresses", value: Object.fromEntries(addresses.map((address: any) => [address.type || "Address", address.address])) },
+            { label: "Addresses", value: Object.fromEntries(addresses.map((address: Record<string, unknown>) => [address.type || "Address", address.address])) },
             { label: "Kubelet", value: nodeInfo.kubeletVersion },
             { label: "Container Runtime", value: nodeInfo.containerRuntimeVersion },
             { label: "OS Image", value: nodeInfo.osImage },

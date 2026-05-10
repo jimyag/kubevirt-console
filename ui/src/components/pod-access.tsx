@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Link } from "react-router-dom"
 import { AlertTriangle, RefreshCw, ScrollText, Terminal as TerminalIcon } from "lucide-react"
 import { Terminal as XTerm } from "xterm"
@@ -98,18 +98,15 @@ function PodLogDialog({ pod }: { pod: PodSummary }) {
   const [logs, setLogs] = useState("")
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
+  const selectedContainer = container || containers[0]?.name || ""
 
-  useEffect(() => {
-    if (!container && containers[0]?.name) setContainer(containers[0].name)
-  }, [container, containers])
-
-  const loadLogs = async () => {
+  const loadLogs = useCallback(async () => {
     if (!pod.metadata.namespace || !pod.metadata.name) return
     setLoading(true)
     setError("")
     try {
       const params = new URLSearchParams({ tailLines: "500", timestamps: "true" })
-      if (container) params.set("container", container)
+      if (selectedContainer) params.set("container", selectedContainer)
       const response = await apiFetch(`/api/v1/namespaces/${pod.metadata.namespace}/pods/${pod.metadata.name}/log?${params.toString()}`)
       if (!response.ok) throw new Error(await response.text())
       setLogs(await response.text())
@@ -119,11 +116,11 @@ function PodLogDialog({ pod }: { pod: PodSummary }) {
     } finally {
       setLoading(false)
     }
-  }
+  }, [pod.metadata.name, pod.metadata.namespace, selectedContainer])
 
   useEffect(() => {
     if (open) loadLogs()
-  }, [open, container])
+  }, [loadLogs, open])
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -140,7 +137,7 @@ function PodLogDialog({ pod }: { pod: PodSummary }) {
         </DialogHeader>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <select
-            value={container}
+            value={selectedContainer}
             onChange={(event) => setContainer(event.target.value)}
             className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-ring"
           >
@@ -178,10 +175,7 @@ function PodShellDialog({ pod }: { pod: PodSummary }) {
   const [container, setContainer] = useState(containers[0]?.name || "")
   const [command, setCommand] = useState("sh")
   const [status, setStatus] = useState<"idle" | "connecting" | "connected" | "closed" | "error">("idle")
-
-  useEffect(() => {
-    if (!container && containers[0]?.name) setContainer(containers[0].name)
-  }, [container, containers])
+  const selectedContainer = container || containers[0]?.name || ""
 
   const createTerminal = () => {
     if (terminalRef.current) return terminalRef.current
@@ -257,7 +251,7 @@ function PodShellDialog({ pod }: { pod: PodSummary }) {
       command: command || "sh",
       context: getContext(),
     })
-    if (container) params.set("container", container)
+    if (selectedContainer) params.set("container", selectedContainer)
 
     const websocket = new WebSocket(`${protocol}//${window.location.host}/api/v1/pod-exec?${params.toString()}`)
     websocket.binaryType = "arraybuffer"
@@ -314,7 +308,7 @@ function PodShellDialog({ pod }: { pod: PodSummary }) {
           <label className="grid gap-1">
             <span className="text-xs font-medium text-muted-foreground">Container</span>
             <select
-              value={container}
+              value={selectedContainer}
               onChange={(event) => setContainer(event.target.value)}
               className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-ring"
             >
@@ -363,9 +357,7 @@ export function RelatedPodsCard({ title = "Related Pods", description, namespace
     () => (selectors && selectors.length > 0 ? selectors : selector ? [selector] : []).map(selectorText).filter(Boolean),
     [selector, selectors]
   )
-  const selectorKey = selectorValues.join("|")
-
-  const load = async () => {
+  const load = useCallback(async () => {
     if (pods) {
       setItems(pods)
       setLoading(false)
@@ -403,11 +395,11 @@ export function RelatedPodsCard({ title = "Related Pods", description, namespace
     } finally {
       setLoading(false)
     }
-  }
+  }, [namespace, podName, pods, selectorValues])
 
   useEffect(() => {
     load()
-  }, [namespace, selectorKey, podName])
+  }, [load])
 
   return (
     <Card className={className}>

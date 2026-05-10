@@ -47,7 +47,7 @@ const stringValue = (value: string | boolean | undefined, fallback = "") => {
   return next || fallback;
 };
 
-const getRecord = (value: unknown) => (value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {});
+const getRecord = (value: unknown) => (value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {});
 const listNames = (value: unknown) => Array.isArray(value) ? value.map((item) => item?.name || item?.metadata?.name || JSON.stringify(item)).join(", ") : "";
 const selectorText = (value: unknown) => Object.entries(getRecord(value)).map(([key, val]) => `${key}=${val}`).join(", ");
 const keyValueText = (value?: Record<string, string>) => Object.entries(value || {}).map(([key, val]) => `${key}=${val}`).join("\n");
