@@ -7,8 +7,10 @@ export const volumesnapshotsConfig: ResourceConfig = {
     title: "Volume Snapshots",
     subtitle: "Manage CSI VolumeSnapshot resources for PVC snapshots",
     listPath: "/apis/snapshot.storage.k8s.io/v1/volumesnapshots",
+    listPathAlternates: ["/apis/snapshot.storage.k8s.io/v1beta1/volumesnapshots", "/apis/snapshot.storage.k8s.io/v1alpha1/volumesnapshots"],
     namespaced: true,
     resourcePath: "/apis/snapshot.storage.k8s.io/v1",
+    resourcePathAlternates: ["/apis/snapshot.storage.k8s.io/v1beta1", "/apis/snapshot.storage.k8s.io/v1alpha1"],
     kind: "VolumeSnapshot",
     createFields: [
       ...shared.namespaceNameFields("example-snapshot"),

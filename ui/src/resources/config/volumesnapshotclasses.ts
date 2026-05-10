@@ -7,8 +7,10 @@ export const volumesnapshotclassesConfig: ResourceConfig = {
     title: "Volume Snapshot Classes",
     subtitle: "Manage CSI VolumeSnapshotClass driver configuration",
     listPath: "/apis/snapshot.storage.k8s.io/v1/volumesnapshotclasses",
+    listPathAlternates: ["/apis/snapshot.storage.k8s.io/v1beta1/volumesnapshotclasses", "/apis/snapshot.storage.k8s.io/v1alpha1/volumesnapshotclasses"],
     namespaced: false,
     resourcePath: "/apis/snapshot.storage.k8s.io/v1",
+    resourcePathAlternates: ["/apis/snapshot.storage.k8s.io/v1beta1", "/apis/snapshot.storage.k8s.io/v1alpha1"],
     kind: "VolumeSnapshotClass",
     createFields: [
       ...shared.nameOnlyFields("example-snapshot-class"),

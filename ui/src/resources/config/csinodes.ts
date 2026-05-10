@@ -7,8 +7,10 @@ export const csinodesConfig: ResourceConfig = {
     title: "CSI Nodes",
     subtitle: "Manage Kubernetes CSINode driver node registrations",
     listPath: "/apis/storage.k8s.io/v1/csinodes",
+    listPathAlternates: ["/apis/storage.k8s.io/v1beta1/csinodes", "/apis/storage.k8s.io/v1alpha1/csinodes"],
     namespaced: false,
     resourcePath: "/apis/storage.k8s.io/v1",
+    resourcePathAlternates: ["/apis/storage.k8s.io/v1beta1", "/apis/storage.k8s.io/v1alpha1"],
     kind: "CSINode",
     createFields: [
       ...shared.nameOnlyFields("example-node"),

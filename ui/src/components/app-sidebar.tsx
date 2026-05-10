@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react"
 import {
+  ChevronDown,
   Cpu,
   Globe,
   HardDrive,
   LayoutDashboard,
+  Boxes,
   Network,
   Server,
   Terminal,
@@ -27,6 +29,7 @@ const setContext = (ctx: string) => localStorage.setItem("kube-context", ctx)
 
 const navItems = [
   { name: "Overview", path: "/", icon: LayoutDashboard },
+  { name: "Kubernetes", path: "/kubernetes", icon: Boxes },
   { name: "KubeVirt", path: "/kubevirt", icon: Cpu },
   { name: "Storage", path: "/storage", icon: HardDrive },
   { name: "Nodes", path: "/nodes", icon: Server },
@@ -113,12 +116,16 @@ export function AppSidebar() {
       </SidebarContent>
 
       <SidebarFooter>
-        <div className="flex items-center gap-2 rounded-md px-2 py-1.5 bg-gradient-to-r from-muted/40 to-muted/20 border border-border/60">
-          <Globe className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+        <div className="relative rounded-lg border bg-card p-2 shadow-sm transition-colors hover:bg-muted/50">
+          <div className="mb-1 flex items-center gap-2 px-1">
+            <span className="h-2 w-2 rounded-full bg-primary" />
+            <span className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground">Cluster</span>
+            <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+          </div>
           <select
             value={currentCtx}
             onChange={handleContextChange}
-            className="flex-1 bg-transparent border-none outline-none text-[11px] font-bold cursor-pointer text-foreground"
+            className="h-8 w-full cursor-pointer appearance-none rounded-md border bg-background pl-8 pr-7 text-xs font-semibold text-foreground outline-none transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring"
           >
             {contexts.map((c) => (
               <option key={c} value={c}>
@@ -127,6 +134,7 @@ export function AppSidebar() {
             ))}
             {contexts.length === 0 && <option value="">Loading...</option>}
           </select>
+          <Globe className="pointer-events-none absolute bottom-4 left-4 h-3.5 w-3.5 text-muted-foreground" />
         </div>
       </SidebarFooter>
     </Sidebar>

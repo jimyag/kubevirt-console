@@ -11,6 +11,7 @@ import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, A
 import { VncConsole } from "./components/VncConsole";
 import { SerialConsole } from "./components/SerialConsole";
 import { AppSidebar } from "./components/app-sidebar";
+import { RelatedPodsCard } from "./components/pod-access";
 import { ResourceCreateDialog, ResourceDetail, ResourceList, ResourceManifest, type ResourceConfig } from "./components/resource-management";
 import { SiteHeader } from "./components/site-header";
 import { SidebarInset, SidebarProvider } from "./components/ui/sidebar";
@@ -19,7 +20,7 @@ import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Card as ShadCard, CardContent, CardDescription, CardHeader, CardTitle } from "./components/ui/card";
 import { dvCreateConfig, jsonPost, jsonPut, keyValueText, mergePatch, numberValue, parseKeyValueText, resourceConfigs, stringValue, vmCreateConfig } from "./resources/configs";
-import { KubeVirtCategoryPage, KubeVirtManagementPage, NetworkCategoryPage, NetworkManagementPage, StorageCategoryPage, StorageManagementPage } from "./resources/group-pages";
+import { KubernetesCategoryPage, KubernetesManagementPage, KubeVirtCategoryPage, KubeVirtManagementPage, NetworkCategoryPage, NetworkManagementPage, StorageCategoryPage, StorageManagementPage } from "./resources/group-pages";
 import {
   Dialog,
   DialogContent,
@@ -364,12 +365,24 @@ function DVList() {
 }
 
 function DashboardOverview() {
-  const [data, setData] = useState<{ vms: VM[], vmis: VMI[], dvs: DV[], nodes: K8sNode[], kvPods: K8sPod[], loading: boolean }>({ vms: [], vmis: [], dvs: [], nodes: [], kvPods: [], loading: true });
+  const [data, setData] = useState<{ vms: VM[], vmis: VMI[], dvs: DV[], nodes: K8sNode[], kvPods: K8sPod[], pods: K8sPod[], deployments: any[], services: any[], namespaces: any[], events: K8sEvent[], loading: boolean }>({ vms: [], vmis: [], dvs: [], nodes: [], kvPods: [], pods: [], deployments: [], services: [], namespaces: [], events: [], loading: true });
   useEffect(() => {
     const load = async () => {
       try {
-        const [vmsR, vmisR, dvsR, nodesR, podsR] = await Promise.all([ apiFetch("/api/v1/vms").then(r => r.json()), apiFetch("/apis/kubevirt.io/v1/virtualmachineinstances").then(r => r.json()), apiFetch("/apis/cdi.kubevirt.io/v1beta1/datavolumes").then(r => r.json()), apiFetch("/api/v1/nodes").then(r => r.json()), apiFetch("/api/v1/namespaces/kubevirt/pods").then(r => r.json()) ]);
-        setData({ vms: vmsR.items || [], vmis: vmisR.items || [], dvs: dvsR.items || [], nodes: nodesR.items || [], kvPods: podsR.items || [], loading: false });
+        const loadJson = (url: string) => apiFetch(url).then(r => r.ok ? r.json() : { items: [] }).catch(() => ({ items: [] }));
+        const [vmsR, vmisR, dvsR, nodesR, kvPodsR, podsR, deploymentsR, servicesR, namespacesR, eventsR] = await Promise.all([
+          loadJson("/api/v1/vms"),
+          loadJson("/apis/kubevirt.io/v1/virtualmachineinstances"),
+          loadJson("/apis/cdi.kubevirt.io/v1beta1/datavolumes"),
+          loadJson("/api/v1/nodes"),
+          loadJson("/api/v1/namespaces/kubevirt/pods"),
+          loadJson("/api/v1/pods"),
+          loadJson("/apis/apps/v1/deployments"),
+          loadJson("/api/v1/services"),
+          loadJson("/api/v1/namespaces"),
+          loadJson("/api/v1/events"),
+        ]);
+        setData({ vms: vmsR.items || [], vmis: vmisR.items || [], dvs: dvsR.items || [], nodes: nodesR.items || [], kvPods: kvPodsR.items || [], pods: podsR.items || [], deployments: deploymentsR.items || [], services: servicesR.items || [], namespaces: namespacesR.items || [], events: eventsR.items || [], loading: false });
       } catch (e) { setData(prev => ({ ...prev, loading: false })); }
     }; load();
   }, []);
@@ -377,6 +390,12 @@ function DashboardOverview() {
   const nsAnalysis = useMemo(() => { const analysis: Record<string, { vmCount: number, storageGi: number }> = {}; data.vms.forEach(vm => { const ns = vm.metadata.namespace; if (!analysis[ns]) analysis[ns] = { vmCount: 0, storageGi: 0 }; analysis[ns].vmCount++; }); data.dvs.forEach(dv => { const ns = dv.metadata.namespace; if (!analysis[ns]) analysis[ns] = { vmCount: 0, storageGi: 0 }; const requested = dv.spec.storage?.resources?.requests?.storage || dv.spec.pvc?.resources?.requests?.storage; analysis[ns].storageGi += parseStorage(requested); }); return Object.entries(analysis).sort((a, b) => b[1].vmCount - a[1].vmCount).map(([name, stats]) => ({ name, ...stats })); }, [data.vms, data.dvs]);
   const infraHealth = useMemo(() => { const components = ["virt-api", "virt-controller", "virt-handler"]; return components.map(c => { const pods = data.kvPods.filter(p => p.metadata.name.startsWith(c)); const healthy = pods.length > 0 && pods.every(p => p.status.phase === "Running"); return { name: c, healthy, count: pods.length }; }); }, [data.kvPods]);
   const totalStorage = nsAnalysis.reduce((acc, curr) => acc + curr.storageGi, 0);
+  const workloadHealth = useMemo(() => {
+    const runningPods = data.pods.filter(p => p.status.phase === "Running").length;
+    const warningEvents = data.events.filter(e => e.type === "Warning").length;
+    const readyDeployments = data.deployments.filter(d => (d.status?.readyReplicas || 0) >= (d.spec?.replicas || 1)).length;
+    return { runningPods, warningEvents, readyDeployments };
+  }, [data.pods, data.deployments, data.events]);
 
   if (data.loading) return (
     <div className="flex items-center justify-center h-64 gap-2">
@@ -389,11 +408,11 @@ function DashboardOverview() {
     <div className="space-y-8 animate-in fade-in duration-700">
       <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-bold">Cluster Dashboard</h1>
-        <p className="text-sm text-muted-foreground">KubeVirt infrastructure overview</p>
+        <p className="text-sm text-muted-foreground">Kubernetes and KubeVirt infrastructure overview</p>
       </div>
 
       {/* Stats Cards */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <ShadCard>
           <CardHeader>
             <div className="flex items-center gap-3">
@@ -453,6 +472,65 @@ function DashboardOverview() {
                     <div key={i.name} title={i.name} className={cn("w-2 h-2 rounded-full", i.healthy ? "bg-green-500" : "bg-red-500 animate-pulse")} />
                   ))}
                 </div>
+              </div>
+            </div>
+          </CardHeader>
+        </ShadCard>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <ShadCard>
+          <CardHeader>
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-blue-50 dark:bg-blue-950/50">
+                <Box className="size-5 text-blue-600 dark:text-blue-400" />
+              </div>
+              <div>
+                <CardDescription>Pods</CardDescription>
+                <CardTitle className="text-2xl font-semibold tabular-nums">{data.pods.length}</CardTitle>
+                <div className="text-sm text-muted-foreground">{workloadHealth.runningPods} Running</div>
+              </div>
+            </div>
+          </CardHeader>
+        </ShadCard>
+        <ShadCard>
+          <CardHeader>
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-green-50 dark:bg-green-950/50">
+                <Layers className="size-5 text-green-600 dark:text-green-400" />
+              </div>
+              <div>
+                <CardDescription>Deployments</CardDescription>
+                <CardTitle className="text-2xl font-semibold tabular-nums">{data.deployments.length}</CardTitle>
+                <div className="text-sm text-muted-foreground">{workloadHealth.readyDeployments} Ready</div>
+              </div>
+            </div>
+          </CardHeader>
+        </ShadCard>
+        <ShadCard>
+          <CardHeader>
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-purple-50 dark:bg-purple-950/50">
+                <Network className="size-5 text-purple-600 dark:text-purple-400" />
+              </div>
+              <div>
+                <CardDescription>Services</CardDescription>
+                <CardTitle className="text-2xl font-semibold tabular-nums">{data.services.length}</CardTitle>
+                <div className="text-sm text-muted-foreground">{data.namespaces.length} Namespaces</div>
+              </div>
+            </div>
+          </CardHeader>
+        </ShadCard>
+        <ShadCard>
+          <CardHeader>
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-orange-50 dark:bg-orange-950/50">
+                <Bell className="size-5 text-orange-600 dark:text-orange-400" />
+              </div>
+              <div>
+                <CardDescription>Events</CardDescription>
+                <CardTitle className="text-2xl font-semibold tabular-nums">{data.events.length}</CardTitle>
+                <div className="text-sm text-muted-foreground">{workloadHealth.warningEvents} Warning</div>
               </div>
             </div>
           </CardHeader>
@@ -881,6 +959,14 @@ function VMDetailContent() {
 
             {/* Metadata, Storage, Networking */}
             <div className="grid gap-4 lg:grid-cols-3">
+              <RelatedPodsCard
+                className="lg:col-span-3"
+                title="Virtual Machine Pods"
+                description="Pods created for this VM runtime. Use these for logs and shell access."
+                namespace={namespace!}
+                selector={{ "kubevirt.io/domain": name! }}
+              />
+
               <ShadCard className="lg:col-span-3">
                 <CardHeader>
                   <div className="flex items-center gap-2">
@@ -1314,6 +1400,8 @@ function App() {
           <div className="flex flex-1 flex-col p-4 lg:p-8 max-w-[100rem] mx-auto w-full">
             <Routes>
               <Route path="/" element={<DashboardOverview />} />
+              <Route path="/kubernetes" element={<KubernetesManagementPage />} />
+              <Route path="/kubernetes/:category" element={<KubernetesCategoryPage />} />
               <Route path="/kubevirt" element={<KubeVirtManagementPage />} />
               <Route path="/kubevirt/:category" element={<KubeVirtCategoryPage />} />
               <Route path="/kubevirt/virtualization/virtual-machines" element={<VMList />} />

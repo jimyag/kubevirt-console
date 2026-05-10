@@ -7,8 +7,10 @@ export const csidriversConfig: ResourceConfig = {
     title: "CSI Drivers",
     subtitle: "Manage Kubernetes CSIDriver capability declarations",
     listPath: "/apis/storage.k8s.io/v1/csidrivers",
+    listPathAlternates: ["/apis/storage.k8s.io/v1beta1/csidrivers", "/apis/storage.k8s.io/v1alpha1/csidrivers"],
     namespaced: false,
     resourcePath: "/apis/storage.k8s.io/v1",
+    resourcePathAlternates: ["/apis/storage.k8s.io/v1beta1", "/apis/storage.k8s.io/v1alpha1"],
     kind: "CSIDriver",
     createFields: [
       ...shared.nameOnlyFields("example.csi.io"),

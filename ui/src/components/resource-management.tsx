@@ -40,6 +40,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import {
+  apiVersionFromListPath,
+  expandListPaths as listPaths,
+  resourceNameFromListPath,
+  resourcePathFromListPath,
+} from "@/resources/api-paths"
+import { RelatedPodsCard, type PodSummary } from "@/components/pod-access"
 
 type KubeResource = {
   apiVersion?: string
@@ -51,6 +58,7 @@ type KubeResource = {
     creationTimestamp?: string
     labels?: Record<string, string>
     annotations?: Record<string, string>
+    ownerReferences?: Array<{ apiVersion?: string; kind?: string; name?: string; uid?: string; controller?: boolean }>
   }
   spec?: Record<string, unknown>
   status?: Record<string, unknown>
@@ -95,8 +103,10 @@ export type ResourceConfig = {
   title: string
   subtitle: string
   listPath: string
+  listPathAlternates?: string[]
   namespaced: boolean
   resourcePath: string
+  resourcePathAlternates?: string[]
   kind: string
   createTemplate: string
   allowCreate?: boolean
@@ -121,6 +131,68 @@ const apiFetch = (url: string, options: RequestInit = {}) => {
   if (ctx) headers.set("X-Kube-Context", ctx)
   return fetch(url, { ...options, headers })
 }
+
+type ServedPath = {
+  listPath: string
+  resourcePath: string
+  apiVersion: string
+}
+
+type DiscoveryData = {
+  apiVersions: string[]
+  apiResources: Array<{ name: string; apiVersion: string }>
+}
+
+type DiscoveryIndex = {
+  apiVersions: Set<string>
+  apiResources: Set<string>
+}
+
+const discoveryCache = new Map<string, Promise<DiscoveryIndex>>()
+
+const cacheKey = (path: string) => `${getContext()}\n${path}`
+
+const getDiscoveryIndex = () => {
+  const key = cacheKey("discovery")
+  const cached = discoveryCache.get(key)
+  if (cached) return cached
+
+  const request = apiFetch("/api/v1/discovery")
+    .then(async (response) => {
+      if (!response.ok) throw new Error(await response.text())
+      const data = await response.json() as DiscoveryData
+      return {
+        apiVersions: new Set(data.apiVersions || []),
+        apiResources: new Set((data.apiResources || []).map((resource) => `${resource.apiVersion}/${resource.name}`)),
+      }
+    })
+
+  discoveryCache.set(key, request)
+  return request
+}
+
+const servedPaths = async (config: ResourceConfig): Promise<ServedPath[]> => {
+  const discovery = await getDiscoveryIndex()
+  return listPaths(config).filter((path) => {
+    const apiVersion = apiVersionFromListPath(path)
+    const resourceName = resourceNameFromListPath(path, config.id)
+    return discovery.apiVersions.has(apiVersion) && discovery.apiResources.has(`${apiVersion}/${resourceName}`)
+  }).map((listPath) => ({
+    listPath,
+    resourcePath: resourcePathFromListPath(listPath),
+    apiVersion: apiVersionFromListPath(listPath),
+  }))
+}
+
+const resourcePathUrl = (config: ResourceConfig, basePath: string, name: string, namespace?: string) => {
+  const nsPath = config.namespaced ? `/namespaces/${namespace}` : ""
+  return `${basePath}${nsPath}/${config.id}/${name}`
+}
+
+const createPathUrl = (config: ResourceConfig, basePath: string, resource: KubeResource) =>
+  config.namespaced
+    ? `${basePath}/namespaces/${resource.metadata.namespace}/${config.id}`
+    : `${basePath}/${config.id}`
 
 const getValue = (obj: unknown, path?: string[]) => {
   if (!path) return undefined
@@ -309,6 +381,65 @@ const defaultDetailSections = (resource: KubeResource): DetailSection[] => [
   },
 ]
 
+const selectorFromMatchLabels = (value: unknown) => {
+  if (!isRecordValue(value)) return undefined
+  const selector = Object.fromEntries(
+    Object.entries(value).filter(([, nextValue]) => isPrimitiveDetailValue(nextValue) && nextValue !== "")
+  ) as Record<string, string>
+  return Object.keys(selector).length > 0 ? selector : undefined
+}
+
+const podLikeResource = (resource: KubeResource): PodSummary => ({
+  metadata: {
+    name: resource.metadata.name,
+    namespace: resource.metadata.namespace,
+    uid: resource.metadata.uid,
+    labels: resource.metadata.labels,
+    creationTimestamp: resource.metadata.creationTimestamp,
+  },
+  spec: resource.spec as PodSummary["spec"],
+  status: resource.status as PodSummary["status"],
+})
+
+const relatedPodsForResource = (resource: KubeResource) => {
+  const namespace = resource.metadata.namespace
+  if (!namespace) return undefined
+
+  const kind = resource.kind || ""
+  const spec = resource.spec || {}
+  const name = resource.metadata.name
+
+  if (kind === "Pod") {
+    return { namespace, podName: name, pods: [podLikeResource(resource)], title: "Pod Access" }
+  }
+
+  const selector = selectorFromMatchLabels(getValue(resource, ["spec", "selector", "matchLabels"]))
+  if (selector && ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"].includes(kind)) {
+    return { namespace, selector, title: "Managed Pods" }
+  }
+
+  const serviceSelector = selectorFromMatchLabels((spec as Record<string, unknown>).selector)
+  if (kind === "Service" && serviceSelector) {
+    return { namespace, selector: serviceSelector, title: "Service Pods" }
+  }
+
+  const podSelector = selectorFromMatchLabels(getValue(resource, ["spec", "podSelector", "matchLabels"]))
+  if (kind === "NetworkPolicy" && podSelector) {
+    return { namespace, selector: podSelector, title: "Selected Pods" }
+  }
+
+  if (["VirtualMachine", "VirtualMachineInstance"].includes(kind)) {
+    return { namespace, selector: { "kubevirt.io/domain": name }, title: "Virtual Machine Pods" }
+  }
+
+  const templateLabels = selectorFromMatchLabels(getValue(resource, ["spec", "template", "metadata", "labels"]))
+  if (templateLabels && ["VirtualMachinePool", "VirtualMachineInstanceReplicaSet"].includes(kind)) {
+    return { namespace, selector: templateLabels, title: "Managed Pods" }
+  }
+
+  return undefined
+}
+
 function ResourceStatus({ resource, config }: { resource: KubeResource; config: ResourceConfig }) {
   const value =
     getValue(resource, config.statusPath) ??
@@ -434,18 +565,33 @@ export function ResourceCreateDialog({ config, onCreated }: { config: ResourceCo
         if (!resource?.metadata?.name) throw new Error("metadata.name is required")
         if (config.namespaced && !resource.metadata.namespace) throw new Error("metadata.namespace is required")
 
-        const basePath = config.createResourcePath
-          ? config.createResourcePath(resource)
-          : config.namespaced
-            ? `${config.resourcePath}/namespaces/${resource.metadata.namespace}/${config.id}`
-            : `${config.resourcePath}/${config.id}`
+        if (config.createResourcePath) {
+          const res = await apiFetch(config.createResourcePath(resource), {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify(resource),
+          })
+          if (!res.ok) throw new Error(`${resource.kind || "Resource"} ${resource.metadata.name}: ${await res.text()}`)
+          continue
+        }
 
-        const res = await apiFetch(basePath, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify(resource),
-        })
-        if (!res.ok) throw new Error(`${resource.kind || "Resource"} ${resource.metadata.name}: ${await res.text()}`)
+        let created = false
+        let lastError = ""
+        for (const path of await servedPaths(config)) {
+          const nextResource = { ...resource, apiVersion: path.apiVersion || resource.apiVersion }
+          const res = await apiFetch(createPathUrl(config, path.resourcePath, resource), {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify(nextResource),
+          })
+          if (res.ok) {
+            created = true
+            break
+          }
+          lastError = await res.text()
+          if (res.status !== 404) break
+        }
+        if (!created) throw new Error(`${resource.kind || "Resource"} ${resource.metadata.name}: ${lastError || "Resource API is not served by this cluster"}`)
       }
       setOpen(false)
       setValues(fieldDefaults(config.createFields))
@@ -641,10 +787,21 @@ export function ResourceList({ config }: { config: ResourceConfig }) {
     setLoading(true)
     setError("")
     try {
-      const res = await apiFetch(config.listPath)
-      if (!res.ok) throw new Error(await res.text())
-      const data = await res.json()
-      setItems(data.items || [])
+      let loaded = false
+      let lastError = ""
+      const paths = await servedPaths(config)
+      for (const path of paths) {
+        const res = await apiFetch(path.listPath)
+        if (res.ok) {
+          const data = await res.json()
+          setItems(data.items || [])
+          loaded = true
+          break
+        }
+        lastError = await res.text()
+        if (res.status !== 404) break
+      }
+      if (!loaded) throw new Error(lastError || "Resource API is not served by this cluster")
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load resources")
       setItems([])
@@ -673,9 +830,14 @@ export function ResourceList({ config }: { config: ResourceConfig }) {
   const selectedCount = Object.values(selected).filter(Boolean).length
 
   const remove = async (item: KubeResource) => {
-    const nsPath = config.namespaced ? `/namespaces/${item.metadata.namespace}` : ""
-    const res = await apiFetch(`${config.resourcePath}${nsPath}/${config.id}/${item.metadata.name}`, { method: "DELETE" })
-    if (res.ok) load()
+    for (const path of await servedPaths(config)) {
+      const res = await apiFetch(resourcePathUrl(config, path.resourcePath, item.metadata.name, item.metadata.namespace), { method: "DELETE" })
+      if (res.ok) {
+        load()
+        return
+      }
+      if (res.status !== 404) return
+    }
   }
 
   return (
@@ -846,10 +1008,19 @@ export function ResourceDetail({ config }: { config: ResourceConfig }) {
       setLoading(true)
       setError("")
       try {
-        const nsPath = config.namespaced ? `/namespaces/${namespace}` : ""
-        const res = await apiFetch(`${config.resourcePath}${nsPath}/${config.id}/${name}`)
-        if (!res.ok) throw new Error(await res.text())
-        setResource(await res.json())
+        let loaded = false
+        let lastError = ""
+        for (const path of await servedPaths(config)) {
+          const res = await apiFetch(resourcePathUrl(config, path.resourcePath, name!, namespace))
+          if (res.ok) {
+            setResource(await res.json())
+            loaded = true
+            break
+          }
+          lastError = await res.text()
+          if (res.status !== 404) break
+        }
+        if (!loaded) throw new Error(lastError || "Resource API is not served by this cluster")
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load resource")
       } finally {
@@ -857,7 +1028,7 @@ export function ResourceDetail({ config }: { config: ResourceConfig }) {
       }
     }
     load()
-  }, [config.id, config.namespaced, config.resourcePath, name, namespace])
+  }, [config, name, namespace])
 
   if (loading) {
     return (
@@ -884,11 +1055,19 @@ export function ResourceDetail({ config }: { config: ResourceConfig }) {
       return
     }
     setLoading(true)
-    const nsPath = config.namespaced ? `/namespaces/${namespace}` : ""
-    apiFetch(`${config.resourcePath}${nsPath}/${config.id}/${name}`)
-      .then(async (res) => {
-        if (!res.ok) throw new Error(await res.text())
-        setResource(await res.json())
+    servedPaths(config)
+      .then(async (paths) => {
+        let lastError = ""
+        for (const path of paths) {
+          const res = await apiFetch(resourcePathUrl(config, path.resourcePath, name!, namespace))
+          if (res.ok) {
+            setResource(await res.json())
+            return
+          }
+          lastError = await res.text()
+          if (res.status !== 404) break
+        }
+        throw new Error(lastError || "Resource API is not served by this cluster")
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load resource"))
       .finally(() => setLoading(false))
@@ -898,6 +1077,7 @@ export function ResourceDetail({ config }: { config: ResourceConfig }) {
     ...defaultDetailSections(resource),
     ...(config.detailSections ? config.detailSections(resource) : []),
   ].filter((section) => section.items.length > 0)
+  const relatedPods = relatedPodsForResource(resource)
 
   return (
     <div className="space-y-5 animate-in fade-in duration-500">
@@ -975,6 +1155,16 @@ export function ResourceDetail({ config }: { config: ResourceConfig }) {
         ))}
       </div>
 
+      {relatedPods && (
+        <RelatedPodsCard
+          title={relatedPods.title}
+          namespace={relatedPods.namespace}
+          selector={relatedPods.selector}
+          podName={relatedPods.podName}
+          pods={relatedPods.pods}
+        />
+      )}
+
       {(labels.length > 0 || annotations.length > 0) && (
         <Card>
           <CardHeader className="pb-3">
@@ -1025,10 +1215,19 @@ export function ResourceManifest({ config }: { config: ResourceConfig }) {
     setLoading(true)
     setError("")
     try {
-      const nsPath = config.namespaced ? `/namespaces/${namespace}` : ""
-      const res = await apiFetch(`${config.resourcePath}${nsPath}/${config.id}/${name}`)
-      if (!res.ok) throw new Error(await res.text())
-      setResource(await res.json())
+      let loaded = false
+      let lastError = ""
+      for (const path of await servedPaths(config)) {
+        const res = await apiFetch(resourcePathUrl(config, path.resourcePath, name!, namespace))
+        if (res.ok) {
+          setResource(await res.json())
+          loaded = true
+          break
+        }
+        lastError = await res.text()
+        if (res.status !== 404) break
+      }
+      if (!loaded) throw new Error(lastError || "Resource API is not served by this cluster")
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load manifest")
       setResource(null)
@@ -1039,7 +1238,7 @@ export function ResourceManifest({ config }: { config: ResourceConfig }) {
 
   useEffect(() => {
     load()
-  }, [config.id, config.namespaced, config.resourcePath, name, namespace])
+  }, [config, name, namespace])
 
   if (loading) {
     return (

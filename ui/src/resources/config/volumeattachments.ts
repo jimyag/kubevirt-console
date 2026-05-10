@@ -7,8 +7,10 @@ export const volumeattachmentsConfig: ResourceConfig = {
     title: "Volume Attachments",
     subtitle: "Manage Kubernetes VolumeAttachment attach intent objects",
     listPath: "/apis/storage.k8s.io/v1/volumeattachments",
+    listPathAlternates: ["/apis/storage.k8s.io/v1beta1/volumeattachments", "/apis/storage.k8s.io/v1alpha1/volumeattachments"],
     namespaced: false,
     resourcePath: "/apis/storage.k8s.io/v1",
+    resourcePathAlternates: ["/apis/storage.k8s.io/v1beta1", "/apis/storage.k8s.io/v1alpha1"],
     kind: "VolumeAttachment",
     createFields: [
       ...shared.nameOnlyFields("example-attachment"),

@@ -7,8 +7,10 @@ export const volumeattributesclassesConfig: ResourceConfig = {
     title: "Volume Attributes Classes",
     subtitle: "Manage CSI VolumeAttributesClass parameter sets",
     listPath: "/apis/storage.k8s.io/v1/volumeattributesclasses",
+    listPathAlternates: ["/apis/storage.k8s.io/v1beta1/volumeattributesclasses", "/apis/storage.k8s.io/v1alpha1/volumeattributesclasses"],
     namespaced: false,
     resourcePath: "/apis/storage.k8s.io/v1",
+    resourcePathAlternates: ["/apis/storage.k8s.io/v1beta1", "/apis/storage.k8s.io/v1alpha1"],
     kind: "VolumeAttributesClass",
     createFields: [
       ...shared.nameOnlyFields("example-volume-attributes"),

@@ -114,6 +114,26 @@ import { kubeOvnBgpConfsConfig } from "./config/kubeovnbgpconfs";
 import { kubeOvnEvpnConfsConfig } from "./config/kubeovnevpnconfs";
 import { kubeOvnDNSNameResolversConfig } from "./config/kubeovndnsnameresolvers";
 import { horizontalpodautoscalersConfig } from "./config/horizontalpodautoscalers";
+import {
+  clusterrolebindingsConfig,
+  clusterrolesConfig,
+  configmapsConfig,
+  cronjobsConfig,
+  customresourcedefinitionsConfig,
+  daemonsetsConfig,
+  deploymentsConfig,
+  eventsConfig,
+  jobsConfig,
+  kubernetesSecretsConfig,
+  namespacesConfig,
+  poddisruptionbudgetsConfig,
+  podsConfig,
+  replicasetsConfig,
+  rolebindingsConfig,
+  rolesConfig,
+  serviceaccountsConfig,
+  statefulsetsConfig,
+} from "./config/kubernetes-core";
 
 export const resourceConfigs: Record<string, ResourceConfig> = {
   virtualmachinepools: virtualmachinepoolsConfig,
@@ -228,4 +248,22 @@ export const resourceConfigs: Record<string, ResourceConfig> = {
   kubeOvnEvpnConfs: kubeOvnEvpnConfsConfig,
   kubeOvnDNSNameResolvers: kubeOvnDNSNameResolversConfig,
   horizontalpodautoscalers: horizontalpodautoscalersConfig,
+  pods: podsConfig,
+  deployments: deploymentsConfig,
+  statefulsets: statefulsetsConfig,
+  daemonsets: daemonsetsConfig,
+  replicasets: replicasetsConfig,
+  jobs: jobsConfig,
+  cronjobs: cronjobsConfig,
+  configmaps: configmapsConfig,
+  kubernetesSecrets: kubernetesSecretsConfig,
+  namespaces: namespacesConfig,
+  events: eventsConfig,
+  serviceaccounts: serviceaccountsConfig,
+  roles: rolesConfig,
+  rolebindings: rolebindingsConfig,
+  clusterroles: clusterrolesConfig,
+  clusterrolebindings: clusterrolebindingsConfig,
+  poddisruptionbudgets: poddisruptionbudgetsConfig,
+  customresourcedefinitions: customresourcedefinitionsConfig,
 };
