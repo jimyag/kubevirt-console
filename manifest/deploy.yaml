@@ -14,20 +14,31 @@ kind: ClusterRole
 metadata:
   name: kubevirt-dashboard
 rules:
-  - apiGroups:
-      - "subresources.kubevirt.io"
-    resources:
-      - virtualmachineinstances/console
+  - nonResourceURLs:
+      - /api
+      - /api/*
+      - /apis
+      - /apis/*
+      - /healthz
+      - /livez
+      - /readyz
+      - /version
     verbs:
       - get
   - apiGroups:
-      - "kubevirt.io"
+      - ""
+      - "*"
     resources:
-      - virtualmachineinstances
+      - "*"
     verbs:
+      - get
       - list
-      - get
       - watch
+      - create
+      - update
+      - patch
+      - delete
+      - deletecollection
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -70,7 +81,6 @@ spec:
               cpu: 200m
               memory: 256Mi
           args:
-            - web
             - --listen
             - "0.0.0.0:8080"
           ports:
