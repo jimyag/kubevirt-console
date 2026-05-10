@@ -21,14 +21,20 @@ A lightweight, single-binary, and modern web-based management console for KubeVi
 
 ## UI Preview
 
-### Virtual Machines List
-![Machines List](images/machines.png)
+### Dashboard Overview
+![Dashboard Overview](images/dashboard.png)
 
-### VM Detailed View
-![VM Detail](images/detail.png)
+### Virtual Machine List
+![Virtual Machine List](images/machines.png)
 
-### High-Performance Serial Console
-![Serial Console](images/console.png)
+### Virtual Machine Details
+![Virtual Machine Details](images/vm-detail.png)
+
+### Resource Details
+![Resource Details](images/resource-detail.png)
+
+### Resource Creation Flow
+![Resource Creation Flow](images/resource-create.png)
 
 ## Installation
 
