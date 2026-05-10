@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react"
 import {
-  ChevronDown,
   Cpu,
   Globe,
   HardDrive,
@@ -23,6 +22,13 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 
 const getContext = () => localStorage.getItem("kube-context") || ""
 const setContext = (ctx: string) => localStorage.setItem("kube-context", ctx)
@@ -54,8 +60,7 @@ export function AppSidebar() {
       .catch(() => {})
   }, [])
 
-  const handleContextChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const v = e.target.value
+  const handleContextChange = (v: string) => {
     setContext(v)
     setCurrentCtx(v)
     window.location.reload()
@@ -116,25 +121,28 @@ export function AppSidebar() {
       </SidebarContent>
 
       <SidebarFooter>
-        <div className="relative rounded-lg border bg-card p-2 shadow-sm transition-colors hover:bg-muted/50">
+        <div className="rounded-lg border bg-card p-2 shadow-sm transition-colors hover:bg-muted/50">
           <div className="mb-1 flex items-center gap-2 px-1">
             <span className="h-2 w-2 rounded-full bg-primary" />
             <span className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground">Cluster</span>
-            <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
           </div>
-          <select
+          <Select
             value={currentCtx}
-            onChange={handleContextChange}
-            className="h-8 w-full cursor-pointer appearance-none rounded-md border bg-background pl-8 pr-7 text-xs font-semibold text-foreground outline-none transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring"
+            onValueChange={handleContextChange}
+            disabled={contexts.length === 0}
           >
-            {contexts.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-            {contexts.length === 0 && <option value="">Loading...</option>}
-          </select>
-          <Globe className="pointer-events-none absolute bottom-4 left-4 h-3.5 w-3.5 text-muted-foreground" />
+            <SelectTrigger className="h-9 w-full justify-start gap-2 bg-background px-2 text-xs font-semibold">
+              <Globe className="h-3.5 w-3.5 text-muted-foreground" />
+              <SelectValue placeholder="Loading..." />
+            </SelectTrigger>
+            <SelectContent align="start" side="top" className="max-h-72 w-[var(--radix-select-trigger-width)]">
+              {contexts.map((c) => (
+                <SelectItem key={c} value={c} className="text-xs">
+                  {c}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       </SidebarFooter>
     </Sidebar>
