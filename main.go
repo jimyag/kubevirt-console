@@ -431,15 +431,16 @@ func runServer(cm *ClusterManager, addr string) error {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		vms, _ := virtClient.VirtualMachine(metav1.NamespaceAll).List(context.Background(), metav1.ListOptions{})
-		nsMap := make(map[string]bool)
-		for _, vm := range vms.Items {
-			nsMap[vm.Namespace] = true
+		namespaces, err := virtClient.CoreV1().Namespaces().List(context.Background(), metav1.ListOptions{})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 		nss := []string{"all"}
-		for ns := range nsMap {
-			nss = append(nss, ns)
+		for _, ns := range namespaces.Items {
+			nss = append(nss, ns.Name)
 		}
+		sort.Strings(nss[1:])
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(nss)
 	})

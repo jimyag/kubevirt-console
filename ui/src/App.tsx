@@ -201,13 +201,20 @@ function VmActionDialog({
 
 // --- Main Views ---
 function VMList() {
-  const [vms, setVms] = useState<VM[]>([]); const [loading, setLoading] = useState(true); const [nss, setNss] = useState<string[]>(["all"]); const [availableS, setAvailableS] = useState<string[]>(["all"]); const [sT, setST] = useState(""); const [nF, setNF] = useState("all"); const [sF, setSF] = useState("all");
+  const [vms, setVms] = useState<VM[]>([]); const [loading, setLoading] = useState(true); const [nss, setNss] = useState<string[]>(["all", "default"]); const [availableS, setAvailableS] = useState<string[]>(["all"]); const [sT, setST] = useState(""); const [nF, setNF] = useState("default"); const [sF, setSF] = useState("all");
   const fetchVms = async () => { setLoading(true); try { const res = await apiFetch(`/api/v1/vms?name=${sT}&status=${sF}&namespace=${nF}`); const data = await res.json(); setVms(data.items || []); } finally { setLoading(false); } };
   const deleteVmRequest = (vm: VM) => ({
     url: `/apis/kubevirt.io/v1/namespaces/${vm.metadata.namespace}/virtualmachines/${vm.metadata.name}`,
     options: { method: "DELETE", headers: { Accept: "application/json" } },
   });
-  useEffect(() => { apiFetch("/api/v1/namespaces-list").then(r => r.json()).then(setNss); apiFetch("/api/v1/vm-statuses").then(r => r.json()).then(setAvailableS); }, []);
+  useEffect(() => {
+    apiFetch("/api/v1/namespaces-list").then(r => r.json()).then((data) => {
+      const next = Array.from(new Set(["all", ...(data || []).filter(Boolean)]));
+      setNss(next);
+      setNF((current) => current && next.includes(current) ? current : next.includes("default") ? "default" : next.find((ns) => ns !== "all") || "all");
+    });
+    apiFetch("/api/v1/vm-statuses").then(r => r.json()).then(setAvailableS);
+  }, []);
   useEffect(() => { const timer = setTimeout(fetchVms, 300); return () => clearTimeout(timer); }, [sT, nF, sF]);
   return (
     <div className="space-y-4 animate-in fade-in duration-500">
@@ -304,10 +311,27 @@ function VMList() {
 }
 
 function DVList() {
-  const [dvs, setDvs] = useState<DV[]>([]); const [loading, setLoading] = useState(true); const [searchTerm, setSearchTerm] = useState("");
-  const loadDvs = async () => { setLoading(true); try { const data = await apiFetch("/apis/cdi.kubevirt.io/v1beta1/datavolumes").then(r => r.json()); setDvs(data.items || []); } finally { setLoading(false); } };
-  useEffect(() => { loadDvs(); }, []);
-  const filtered = dvs.filter(dv => dv.metadata.name.toLowerCase().includes(searchTerm.toLowerCase()));
+  const [dvs, setDvs] = useState<DV[]>([]); const [loading, setLoading] = useState(true); const [searchTerm, setSearchTerm] = useState(""); const [nss, setNss] = useState<string[]>(["all", "default"]); const [namespaceFilter, setNamespaceFilter] = useState("default");
+  const loadDvs = async () => {
+    setLoading(true);
+    try {
+      const path = namespaceFilter === "all" ? "/apis/cdi.kubevirt.io/v1beta1/datavolumes" : `/apis/cdi.kubevirt.io/v1beta1/namespaces/${namespaceFilter}/datavolumes`;
+      const data = await apiFetch(path).then(r => r.json());
+      setDvs(data.items || []);
+    } finally { setLoading(false); }
+  };
+  useEffect(() => {
+    apiFetch("/api/v1/namespaces-list").then(r => r.json()).then((data) => {
+      const next = Array.from(new Set(["all", ...(data || []).filter(Boolean)]));
+      setNss(next);
+      setNamespaceFilter((current) => current && next.includes(current) ? current : next.includes("default") ? "default" : next.find((ns) => ns !== "all") || "all");
+    });
+  }, []);
+  useEffect(() => { loadDvs(); }, [namespaceFilter]);
+  const filtered = dvs.filter(dv => {
+    const needle = searchTerm.toLowerCase();
+    return dv.metadata.name.toLowerCase().includes(needle) || dv.metadata.namespace.toLowerCase().includes(needle);
+  });
   return (
     <div className="space-y-4 animate-in fade-in duration-500">
       <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
@@ -327,13 +351,16 @@ function DVList() {
             <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
             Refresh
           </Button>
+          <select className="h-9 min-w-[150px] rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-ring" value={namespaceFilter} onChange={e => setNamespaceFilter(e.target.value)} aria-label="Filter namespace">
+            {nss.map(ns => <option key={ns} value={ns}>{ns}</option>)}
+          </select>
         </div>
         <div className="flex w-full flex-col gap-2 md:w-auto md:flex-row md:items-center">
           <div className="relative w-full md:w-[320px]">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input className="pl-9" placeholder="Search storage..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
           </div>
-          <ResourceCreateDialog config={dvCreateConfig} onCreated={loadDvs} />
+          <ResourceCreateDialog config={dvCreateConfig} onCreated={loadDvs} defaultNamespace={namespaceFilter} />
         </div>
       </div>
       <div className="overflow-hidden rounded-lg border bg-card">

@@ -189,6 +189,11 @@ const resourcePathUrl = (config: ResourceConfig, basePath: string, name: string,
   return `${basePath}${nsPath}/${config.id}/${name}`
 }
 
+const resourceListUrl = (config: ResourceConfig, path: ServedPath, namespace: string) =>
+  config.namespaced && namespace !== "all"
+    ? `${path.resourcePath}/namespaces/${namespace}/${config.id}`
+    : path.listPath
+
 const createPathUrl = (config: ResourceConfig, basePath: string, resource: KubeResource) =>
   config.namespaced
     ? `${basePath}/namespaces/${resource.metadata.namespace}/${config.id}`
@@ -1274,6 +1279,12 @@ function ResourceSpecificOverview({ resource, config, sections }: { resource: Ku
 const fieldDefaults = (fields?: CreateFormField[]) =>
   Object.fromEntries((fields || []).map((field) => [field.name, typeof field.defaultValue === "function" ? "" : field.defaultValue ?? ""])) as Record<string, string | boolean>
 
+const createFieldDefaults = (fields: CreateFormField[], defaultNamespace?: string) => {
+  const defaults = fieldDefaults(fields)
+  if (defaultNamespace && defaultNamespace !== "all" && "namespace" in defaults) defaults.namespace = defaultNamespace
+  return defaults
+}
+
 const resourceFieldDefaults = (resource: KubeResource, fields?: CreateFormField[]) =>
   Object.fromEntries((fields || []).map((field) => [
     field.name,
@@ -1808,10 +1819,10 @@ function FormField({ field, value, onChange }: { field: CreateFormField; value: 
   )
 }
 
-export function ResourceCreateDialog({ config, onCreated }: { config: ResourceConfig; onCreated: () => void }) {
+export function ResourceCreateDialog({ config, onCreated, defaultNamespace }: { config: ResourceConfig; onCreated: () => void; defaultNamespace?: string }) {
   const createFields = useMemo(() => effectiveCreateFields(config), [config])
   const [open, setOpen] = useState(false)
-  const [values, setValues] = useState<Record<string, string | boolean>>(() => fieldDefaults(createFields))
+  const [values, setValues] = useState<Record<string, string | boolean>>(() => createFieldDefaults(createFields, defaultNamespace))
   const [content, setContent] = useState("")
   const [advanced, setAdvanced] = useState(false)
   const [yamlEdited, setYamlEdited] = useState(false)
@@ -1833,12 +1844,12 @@ export function ResourceCreateDialog({ config, onCreated }: { config: ResourceCo
 
   useEffect(() => {
     if (!open) {
-      setValues(fieldDefaults(createFields))
+      setValues(createFieldDefaults(createFields, defaultNamespace))
       setAdvanced(false)
       setYamlEdited(false)
       setError("")
     }
-  }, [createFields, open])
+  }, [createFields, defaultNamespace, open])
 
   const createResource = async () => {
     setSaving(true)
@@ -1880,7 +1891,7 @@ export function ResourceCreateDialog({ config, onCreated }: { config: ResourceCo
         if (!created) throw new Error(`${resource.kind || "Resource"} ${resource.metadata.name}: ${lastError || "Resource API is not served by this cluster"}`)
       }
       setOpen(false)
-      setValues(fieldDefaults(createFields))
+      setValues(createFieldDefaults(createFields, defaultNamespace))
       setYamlEdited(false)
       onCreated()
     } catch (err) {
@@ -2066,8 +2077,37 @@ export function ResourceList({ config }: { config: ResourceConfig }) {
   const [items, setItems] = useState<KubeResource[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState("")
+  const [namespaces, setNamespaces] = useState<string[]>(["all"])
+  const [namespaceFilter, setNamespaceFilter] = useState("default")
   const [error, setError] = useState("")
   const [selected, setSelected] = useState<Record<string, boolean>>({})
+
+  useEffect(() => {
+    if (!config.namespaced) return
+    let cancelled = false
+    apiFetch("/api/v1/namespaces-list")
+      .then(async (response) => {
+        if (!response.ok) throw new Error(await response.text())
+        return response.json() as Promise<string[]>
+      })
+      .then((data) => {
+        if (cancelled) return
+        const next = Array.from(new Set(["all", ...(data || []).filter(Boolean)]))
+        setNamespaces(next)
+        setNamespaceFilter((current) => {
+          if (current && next.includes(current)) return current
+          return next.includes("default") ? "default" : next.find((ns) => ns !== "all") || "all"
+        })
+      })
+      .catch(() => {
+        if (cancelled) return
+        setNamespaces(["all", "default"])
+        setNamespaceFilter("default")
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [config.id, config.namespaced])
 
   const load = async () => {
     setLoading(true)
@@ -2077,10 +2117,11 @@ export function ResourceList({ config }: { config: ResourceConfig }) {
       let lastError = ""
       const paths = await servedPaths(config)
       for (const path of paths) {
-        const res = await apiFetch(path.listPath)
+        const res = await apiFetch(resourceListUrl(config, path, namespaceFilter))
         if (res.ok) {
           const data = await res.json()
           setItems(data.items || [])
+          setSelected({})
           loaded = true
           break
         }
@@ -2098,7 +2139,7 @@ export function ResourceList({ config }: { config: ResourceConfig }) {
 
   useEffect(() => {
     load()
-  }, [config.id])
+  }, [config.id, namespaceFilter])
 
   const filtered = useMemo(() => {
     const needle = search.toLowerCase()
@@ -2111,7 +2152,9 @@ export function ResourceList({ config }: { config: ResourceConfig }) {
   const emptyTitle = search ? "No matching resources" : `No ${config.title.toLowerCase()} found`
   const emptyDescription = search
     ? "Clear or change the search text to see other resources."
-    : "This API returned an empty list for the current cluster context."
+    : config.namespaced && namespaceFilter !== "all"
+      ? `This API returned an empty list for namespace ${namespaceFilter}.`
+      : "This API returned an empty list for the current cluster context."
   const tableColumnCount = 5 + (config.namespaced ? 1 : 0) + (config.extraColumns?.length || 0)
   const selectedCount = Object.values(selected).filter(Boolean).length
 
@@ -2148,6 +2191,16 @@ export function ResourceList({ config }: { config: ResourceConfig }) {
             <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
             Refresh
           </Button>
+          {config.namespaced && (
+            <select
+              className="h-9 min-w-[150px] rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-ring"
+              value={namespaceFilter}
+              onChange={(event) => setNamespaceFilter(event.target.value)}
+              aria-label="Filter namespace"
+            >
+              {namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
+            </select>
+          )}
           {selectedCount > 0 && (
             <Badge variant="outline">{selectedCount} selected</Badge>
           )}
@@ -2157,7 +2210,7 @@ export function ResourceList({ config }: { config: ResourceConfig }) {
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input className="pl-9" placeholder={`Search ${config.title.toLowerCase()}...`} value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
-          {canCreateResource(config) && <ResourceCreateDialog config={config} onCreated={load} />}
+          {canCreateResource(config) && <ResourceCreateDialog config={config} onCreated={load} defaultNamespace={namespaceFilter} />}
         </div>
       </div>
 
@@ -2225,7 +2278,7 @@ export function ResourceList({ config }: { config: ResourceConfig }) {
                         <div className="font-semibold text-foreground">{emptyTitle}</div>
                         <p className="mt-1 text-sm text-muted-foreground">{emptyDescription}</p>
                       </div>
-                      {canCreateResource(config) && !search && <ResourceCreateDialog config={config} onCreated={load} />}
+                      {canCreateResource(config) && !search && <ResourceCreateDialog config={config} onCreated={load} defaultNamespace={namespaceFilter} />}
                     </div>
                   </TableCell>
                 </TableRow>
