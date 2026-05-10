@@ -11,7 +11,6 @@ import {
   Route,
   Scale,
   Server,
-  Shield,
   Terminal,
   Undo2,
 } from "lucide-react"
@@ -44,7 +43,6 @@ const navItems = [
   { name: "Snapshots", path: "/snapshots", icon: Camera },
   { name: "Restores", path: "/restores", icon: Undo2 },
   { name: "SSH Keys", path: "/ssh-keys", icon: KeyRound },
-  { name: "Firewalls", path: "/firewalls", icon: Shield },
   { name: "Autoscaling", path: "/autoscaling", icon: Scale },
 ]
 

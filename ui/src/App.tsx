@@ -42,6 +42,10 @@ const namespaceNameFields = (name: string, namespace = "default"): CreateFormFie
   { name: "namespace", label: "Namespace", section: "Identity", defaultValue: namespace, required: true },
 ];
 
+const nameOnlyFields = (name: string): CreateFormField[] => [
+  { name: "name", label: "Name", section: "Identity", defaultValue: name, required: true },
+];
+
 const numberValue = (value: string | boolean, fallback: number) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
@@ -66,6 +70,9 @@ const parseKeyValueText = (text: string) => Object.fromEntries(
     })
     .filter(([key]) => key)
 );
+const selectorFromValues = (values: Record<string, string | boolean>, keyName = "selectorKey", valueName = "selectorValue") => ({
+  matchLabels: { [stringValue(values[keyName], "app")]: stringValue(values[valueName], "default") },
+});
 const mergePatch = (body: unknown): RequestInit => ({
   method: "PATCH",
   headers: { "Content-Type": "application/merge-patch+json", Accept: "application/json" },
@@ -328,6 +335,160 @@ const networkPolicyActions: ResourceAction[] = [
     },
   },
 ];
+
+const csvList = (value: string | boolean | undefined) => stringValue(value).split(",").map((item) => item.trim()).filter(Boolean);
+
+const kubeOvnResourceConfig = ({
+  plural,
+  path,
+  title,
+  subtitle,
+  kind,
+  namespaced = false,
+  createFields = [],
+  buildSpec,
+  statusPath,
+  extraColumns = [],
+  allowCreate,
+  allowDelete,
+}: {
+  plural: string;
+  path: string;
+  title: string;
+  subtitle: string;
+  kind: string;
+  namespaced?: boolean;
+  createFields?: CreateFormField[];
+  buildSpec?: (values: Record<string, string | boolean>) => Record<string, unknown>;
+  statusPath?: string[];
+  extraColumns?: ResourceConfig["extraColumns"];
+  allowCreate?: boolean;
+  allowDelete?: boolean;
+}): ResourceConfig => ({
+  id: plural,
+  path,
+  title,
+  subtitle,
+  listPath: `/apis/kubeovn.io/v1/${plural}`,
+  namespaced,
+  resourcePath: "/apis/kubeovn.io/v1",
+  kind,
+  allowCreate,
+  allowDelete,
+  createFields: [
+    ...(namespaced ? namespaceNameFields(`example-${plural}`) : nameOnlyFields(`example-${plural}`)),
+    ...createFields,
+  ],
+  buildCreateResource: buildSpec ? (values) => ({
+    apiVersion: "kubeovn.io/v1",
+    kind,
+    metadata: {
+      name: stringValue(values.name, `example-${plural}`),
+      ...(namespaced ? { namespace: stringValue(values.namespace, "default") } : {}),
+    },
+    spec: buildSpec(values),
+  }) : undefined,
+  statusPath,
+  detailSections: (r) => {
+    const spec = getRecord(r.spec);
+    const status = getRecord(r.status);
+    return [
+      {
+        title: kind,
+        items: Object.entries(spec).map(([label, value]) => ({ label, value })),
+      },
+      {
+        title: "Status",
+        items: Object.entries(status).map(([label, value]) => ({ label, value })),
+      },
+    ].filter((section) => section.items.length > 0);
+  },
+  extraColumns,
+  createTemplate: `apiVersion: kubeovn.io/v1
+kind: ${kind}
+metadata:
+  name: example-${plural}
+spec: {}
+`,
+});
+
+const extensionResourceConfig = ({
+  groupVersion,
+  plural,
+  path,
+  title,
+  subtitle,
+  kind,
+  namespaced = false,
+  createFields = [],
+  buildSpec,
+  statusPath,
+  extraColumns = [],
+  allowCreate,
+  allowDelete,
+}: {
+  groupVersion: string;
+  plural: string;
+  path: string;
+  title: string;
+  subtitle: string;
+  kind: string;
+  namespaced?: boolean;
+  createFields?: CreateFormField[];
+  buildSpec?: (values: Record<string, string | boolean>) => Record<string, unknown>;
+  statusPath?: string[];
+  extraColumns?: ResourceConfig["extraColumns"];
+  allowCreate?: boolean;
+  allowDelete?: boolean;
+}): ResourceConfig => ({
+  id: plural,
+  path,
+  title,
+  subtitle,
+  listPath: `/apis/${groupVersion}/${plural}`,
+  namespaced,
+  resourcePath: `/apis/${groupVersion}`,
+  kind,
+  allowCreate,
+  allowDelete,
+  createFields: [
+    ...(namespaced ? namespaceNameFields(`example-${plural}`) : nameOnlyFields(`example-${plural}`)),
+    ...createFields,
+  ],
+  buildCreateResource: buildSpec ? (values) => ({
+    apiVersion: groupVersion,
+    kind,
+    metadata: {
+      name: stringValue(values.name, `example-${plural}`),
+      ...(namespaced ? { namespace: stringValue(values.namespace, "default") } : {}),
+    },
+    spec: buildSpec(values),
+  }) : undefined,
+  statusPath,
+  detailSections: (r) => {
+    const spec = getRecord(r.spec);
+    const status = getRecord(r.status);
+    return [
+      { title: "Spec", items: Object.entries(spec).map(([label, value]) => ({ label, value })) },
+      { title: "Status", items: Object.entries(status).map(([label, value]) => ({ label, value })) },
+    ].filter((section) => section.items.length > 0);
+  },
+  extraColumns,
+  createTemplate: `apiVersion: ${groupVersion}
+kind: ${kind}
+metadata:
+  name: example-${plural}
+spec: {}
+`,
+});
+
+const calicoResourceConfig = (config: Omit<Parameters<typeof extensionResourceConfig>[0], "groupVersion">) =>
+  extensionResourceConfig({ groupVersion: "projectcalico.org/v3", ...config });
+
+const ciliumResourceConfig = (config: Omit<Parameters<typeof extensionResourceConfig>[0], "groupVersion"> & { version?: "v2" | "v2alpha1" }) => {
+  const { version = "v2", ...rest } = config;
+  return extensionResourceConfig({ groupVersion: `cilium.io/${version}`, ...rest });
+};
 
 export const vmCreateConfig: ResourceConfig = {
   id: "virtualmachines",
@@ -632,8 +793,8 @@ metadata:
   },
   "network-attachment-definitions": {
     id: "network-attachment-definitions",
-    path: "/networks",
-    title: "Networks",
+    path: "/networks/kubernetes/nads",
+    title: "Network Attachments",
     subtitle: "Manage Multus network attachment definitions",
     listPath: "/apis/k8s.cni.cncf.io/v1/network-attachment-definitions",
     namespaced: true,
@@ -976,8 +1137,8 @@ stringData:
   },
   networkpolicies: {
     id: "networkpolicies",
-    path: "/firewalls",
-    title: "Firewalls",
+    path: "/networks/kubernetes/network-policies",
+    title: "Network Policies",
     subtitle: "Manage Kubernetes NetworkPolicy firewall rules",
     listPath: "/apis/networking.k8s.io/v1/networkpolicies",
     namespaced: true,
@@ -1030,6 +1191,1035 @@ spec:
     - Ingress
 `,
   },
+  ingresses: {
+    id: "ingresses",
+    path: "/networks/kubernetes/ingresses",
+    title: "Ingresses",
+    subtitle: "Manage Kubernetes Ingress HTTP routing resources",
+    listPath: "/apis/networking.k8s.io/v1/ingresses",
+    namespaced: true,
+    resourcePath: "/apis/networking.k8s.io/v1",
+    kind: "Ingress",
+    createFields: [
+      ...namespaceNameFields("example-ingress"),
+      { name: "className", label: "Ingress Class", section: "Routing", defaultValue: "nginx", placeholder: "optional" },
+      { name: "host", label: "Host", section: "Routing", defaultValue: "example.local" },
+      { name: "path", label: "Path", section: "Routing", defaultValue: "/" },
+      { name: "serviceName", label: "Service Name", section: "Backend", defaultValue: "example-service" },
+      { name: "servicePort", label: "Service Port", section: "Backend", type: "number", defaultValue: "80" },
+      { name: "tlsSecretName", label: "TLS Secret", section: "TLS", defaultValue: "", placeholder: "optional" },
+    ],
+    buildCreateResource: (values) => {
+      const host = stringValue(values.host, "example.local");
+      const tlsSecretName = stringValue(values.tlsSecretName);
+      return {
+        apiVersion: "networking.k8s.io/v1",
+        kind: "Ingress",
+        metadata: { name: stringValue(values.name, "example-ingress"), namespace: stringValue(values.namespace, "default") },
+        spec: {
+          ...(stringValue(values.className) ? { ingressClassName: stringValue(values.className) } : {}),
+          rules: [{
+            host,
+            http: {
+              paths: [{
+                path: stringValue(values.path, "/"),
+                pathType: "Prefix",
+                backend: { service: { name: stringValue(values.serviceName, "example-service"), port: { number: numberValue(values.servicePort, 80) } } },
+              }],
+            },
+          }],
+          ...(tlsSecretName ? { tls: [{ hosts: [host], secretName: tlsSecretName }] } : {}),
+        },
+      };
+    },
+    statusPath: ["spec", "ingressClassName"],
+    detailSections: (r) => {
+      const spec = getRecord(r.spec);
+      const status = getRecord(r.status);
+      return [{
+        title: "Ingress",
+        items: [
+          { label: "Class", value: spec.ingressClassName },
+          { label: "Rules", value: spec.rules },
+          { label: "TLS", value: spec.tls },
+          { label: "Load Balancer", value: getRecord(status.loadBalancer).ingress },
+        ],
+      }];
+    },
+    extraColumns: [
+      { label: "Class", value: (r) => String(getRecord(r.spec).ingressClassName || "N/A") },
+      { label: "Hosts", value: (r) => (Array.isArray(getRecord(r.spec).rules) ? getRecord(r.spec).rules.map((rule: any) => rule.host).filter(Boolean).join(", ") : "") || "N/A" },
+    ],
+    createTemplate: `apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: example-ingress
+  namespace: default
+spec:
+  rules: []
+`,
+  },
+  kubernetesServices: {
+    id: "services",
+    path: "/networks/kubernetes/services",
+    title: "Services",
+    subtitle: "Manage Kubernetes Service network endpoints",
+    listPath: "/api/v1/services",
+    namespaced: true,
+    resourcePath: "/api/v1",
+    kind: "Service",
+    createFields: [
+      ...namespaceNameFields("example-service"),
+      { name: "type", label: "Type", section: "Service", type: "select", defaultValue: "ClusterIP", options: [{ label: "ClusterIP", value: "ClusterIP" }, { label: "NodePort", value: "NodePort" }, { label: "LoadBalancer", value: "LoadBalancer" }] },
+      { name: "selectorKey", label: "Selector Key", section: "Selector", defaultValue: "app" },
+      { name: "selectorValue", label: "Selector Value", section: "Selector", defaultValue: "example" },
+      { name: "port", label: "Port", section: "Ports", type: "number", defaultValue: "80" },
+      { name: "targetPort", label: "Target Port", section: "Ports", type: "number", defaultValue: "80" },
+      { name: "protocol", label: "Protocol", section: "Ports", type: "select", defaultValue: "TCP", options: [{ label: "TCP", value: "TCP" }, { label: "UDP", value: "UDP" }, { label: "SCTP", value: "SCTP" }] },
+    ],
+    buildCreateResource: (values) => ({
+      apiVersion: "v1",
+      kind: "Service",
+      metadata: { name: stringValue(values.name, "example-service"), namespace: stringValue(values.namespace, "default") },
+      spec: {
+        type: stringValue(values.type, "ClusterIP"),
+        selector: { [stringValue(values.selectorKey, "app")]: stringValue(values.selectorValue, "example") },
+        ports: [{ port: numberValue(values.port, 80), targetPort: numberValue(values.targetPort, 80), protocol: stringValue(values.protocol, "TCP") }],
+      },
+    }),
+    statusPath: ["spec", "type"],
+    detailSections: (r) => [{ title: "Service", items: [{ label: "Type", value: getRecord(r.spec).type }, { label: "Cluster IP", value: getRecord(r.spec).clusterIP }, { label: "External IPs", value: getRecord(r.spec).externalIPs }, { label: "Ports", value: getRecord(r.spec).ports }, { label: "Selector", value: getRecord(r.spec).selector }, { label: "Load Balancer", value: getRecord(r.status).loadBalancer }] }],
+    extraColumns: [{ label: "Type", value: (r) => String(getRecord(r.spec).type || "N/A") }, { label: "Cluster IP", value: (r) => String(getRecord(r.spec).clusterIP || "N/A") }],
+    createTemplate: `apiVersion: v1
+kind: Service
+metadata:
+  name: example-service
+  namespace: default
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: 80
+`,
+  },
+  endpoints: {
+    id: "endpoints",
+    path: "/networks/kubernetes/endpoints",
+    title: "Endpoints",
+    subtitle: "Inspect Kubernetes Endpoints selected by Services",
+    listPath: "/api/v1/endpoints",
+    namespaced: true,
+    resourcePath: "/api/v1",
+    kind: "Endpoints",
+    allowCreate: false,
+    allowDelete: false,
+    statusPath: ["subsets", "0", "addresses", "0", "ip"],
+    detailSections: (r) => [{ title: "Endpoints", items: [{ label: "Subsets", value: (r as any).subsets }] }],
+    extraColumns: [{ label: "Subsets", value: (r) => String(((r as any).subsets as unknown[] | undefined)?.length || 0) }],
+    createTemplate: `apiVersion: v1
+kind: Endpoints
+metadata:
+  name: example-endpoints
+  namespace: default
+`,
+  },
+  endpointSlices: {
+    id: "endpointslices",
+    path: "/networks/kubernetes/endpoint-slices",
+    title: "Endpoint Slices",
+    subtitle: "Inspect Kubernetes discovery EndpointSlice resources",
+    listPath: "/apis/discovery.k8s.io/v1/endpointslices",
+    namespaced: true,
+    resourcePath: "/apis/discovery.k8s.io/v1",
+    kind: "EndpointSlice",
+    allowCreate: false,
+    allowDelete: false,
+    statusPath: ["addressType"],
+    detailSections: (r) => [{ title: "Endpoint Slice", items: [{ label: "Address Type", value: (r as any).addressType }, { label: "Endpoints", value: (r as any).endpoints }, { label: "Ports", value: (r as any).ports }] }],
+    extraColumns: [{ label: "Address Type", value: (r) => String((r as any).addressType || "N/A") }, { label: "Endpoints", value: (r) => String(((r as any).endpoints as unknown[] | undefined)?.length || 0) }],
+    createTemplate: `apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: example-endpoint-slice
+  namespace: default
+addressType: IPv4
+`,
+  },
+  ingressClasses: {
+    id: "ingressclasses",
+    path: "/networks/kubernetes/ingress-classes",
+    title: "Ingress Classes",
+    subtitle: "Manage Kubernetes IngressClass controller bindings",
+    listPath: "/apis/networking.k8s.io/v1/ingressclasses",
+    namespaced: false,
+    resourcePath: "/apis/networking.k8s.io/v1",
+    kind: "IngressClass",
+    createFields: [...nameOnlyFields("example-ingress-class"), { name: "controller", label: "Controller", section: "Controller", defaultValue: "k8s.io/ingress-nginx" }, { name: "isDefault", label: "Default Class", section: "Controller", type: "checkbox", defaultValue: false }],
+    buildCreateResource: (values) => ({
+      apiVersion: "networking.k8s.io/v1",
+      kind: "IngressClass",
+      metadata: {
+        name: stringValue(values.name, "example-ingress-class"),
+        ...(values.isDefault === true ? { annotations: { "ingressclass.kubernetes.io/is-default-class": "true" } } : {}),
+      },
+      spec: { controller: stringValue(values.controller, "k8s.io/ingress-nginx") },
+    }),
+    statusPath: ["spec", "controller"],
+    detailSections: (r) => [{ title: "Ingress Class", items: [{ label: "Controller", value: getRecord(r.spec).controller }, { label: "Parameters", value: getRecord(r.spec).parameters }] }],
+    extraColumns: [{ label: "Controller", value: (r) => String(getRecord(r.spec).controller || "N/A") }],
+    createTemplate: `apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: example-ingress-class
+spec:
+  controller: k8s.io/ingress-nginx
+`,
+  },
+  gatewayclasses: {
+    id: "gatewayclasses",
+    path: "/networks/gateway-api/gateway-classes",
+    title: "Gateway Classes",
+    subtitle: "Manage Gateway API cluster-scoped GatewayClass resources",
+    listPath: "/apis/gateway.networking.k8s.io/v1/gatewayclasses",
+    namespaced: false,
+    resourcePath: "/apis/gateway.networking.k8s.io/v1",
+    kind: "GatewayClass",
+    createFields: [
+      ...nameOnlyFields("example-gateway-class"),
+      { name: "controllerName", label: "Controller Name", section: "Gateway", defaultValue: "example.com/gateway-controller" },
+      { name: "description", label: "Description", section: "Gateway", defaultValue: "" },
+    ],
+    buildCreateResource: (values) => ({
+      apiVersion: "gateway.networking.k8s.io/v1",
+      kind: "GatewayClass",
+      metadata: { name: stringValue(values.name, "example-gateway-class") },
+      spec: {
+        controllerName: stringValue(values.controllerName, "example.com/gateway-controller"),
+        ...(stringValue(values.description) ? { description: stringValue(values.description) } : {}),
+      },
+    }),
+    statusPath: ["status", "conditions", "0", "type"],
+    detailSections: (r) => [{ title: "Gateway Class", items: [{ label: "Controller", value: getRecord(r.spec).controllerName }, { label: "Description", value: getRecord(r.spec).description }, { label: "Conditions", value: getRecord(r.status).conditions }] }],
+    extraColumns: [{ label: "Controller", value: (r) => String(getRecord(r.spec).controllerName || "N/A") }],
+    createTemplate: `apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: example-gateway-class
+spec:
+  controllerName: example.com/gateway-controller
+`,
+  },
+  gateways: {
+    id: "gateways",
+    path: "/networks/gateway-api/gateways",
+    title: "Gateways",
+    subtitle: "Manage Gateway API Gateway listeners",
+    listPath: "/apis/gateway.networking.k8s.io/v1/gateways",
+    namespaced: true,
+    resourcePath: "/apis/gateway.networking.k8s.io/v1",
+    kind: "Gateway",
+    createFields: [
+      ...namespaceNameFields("example-gateway"),
+      { name: "gatewayClassName", label: "Gateway Class", section: "Gateway", defaultValue: "example-gateway-class" },
+      { name: "listenerName", label: "Listener Name", section: "Listener", defaultValue: "http" },
+      { name: "hostname", label: "Hostname", section: "Listener", defaultValue: "", placeholder: "optional" },
+      { name: "port", label: "Port", section: "Listener", type: "number", defaultValue: "80" },
+      { name: "protocol", label: "Protocol", section: "Listener", type: "select", defaultValue: "HTTP", options: [{ label: "HTTP", value: "HTTP" }, { label: "HTTPS", value: "HTTPS" }, { label: "TCP", value: "TCP" }, { label: "TLS", value: "TLS" }] },
+    ],
+    buildCreateResource: (values) => ({
+      apiVersion: "gateway.networking.k8s.io/v1",
+      kind: "Gateway",
+      metadata: { name: stringValue(values.name, "example-gateway"), namespace: stringValue(values.namespace, "default") },
+      spec: {
+        gatewayClassName: stringValue(values.gatewayClassName, "example-gateway-class"),
+        listeners: [{
+          name: stringValue(values.listenerName, "http"),
+          ...(stringValue(values.hostname) ? { hostname: stringValue(values.hostname) } : {}),
+          port: numberValue(values.port, 80),
+          protocol: stringValue(values.protocol, "HTTP"),
+        }],
+      },
+    }),
+    statusPath: ["status", "conditions", "0", "type"],
+    detailSections: (r) => [{ title: "Gateway", items: [{ label: "Class", value: getRecord(r.spec).gatewayClassName }, { label: "Listeners", value: getRecord(r.spec).listeners }, { label: "Addresses", value: getRecord(r.status).addresses }, { label: "Conditions", value: getRecord(r.status).conditions }] }],
+    extraColumns: [{ label: "Class", value: (r) => String(getRecord(r.spec).gatewayClassName || "N/A") }, { label: "Listeners", value: (r) => String((getRecord(r.spec).listeners as unknown[] | undefined)?.length || 0) }],
+    createTemplate: `apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: example-gateway
+  namespace: default
+spec:
+  gatewayClassName: example-gateway-class
+  listeners: []
+`,
+  },
+  httproutes: {
+    id: "httproutes",
+    path: "/networks/gateway-api/http-routes",
+    title: "HTTP Routes",
+    subtitle: "Manage Gateway API HTTPRoute resources",
+    listPath: "/apis/gateway.networking.k8s.io/v1/httproutes",
+    namespaced: true,
+    resourcePath: "/apis/gateway.networking.k8s.io/v1",
+    kind: "HTTPRoute",
+    createFields: [
+      ...namespaceNameFields("example-http-route"),
+      { name: "parentGateway", label: "Parent Gateway", section: "Parent", defaultValue: "example-gateway" },
+      { name: "sectionName", label: "Listener Section", section: "Parent", defaultValue: "http", placeholder: "optional" },
+      { name: "host", label: "Hostname", section: "Match", defaultValue: "example.local" },
+      { name: "path", label: "Path Prefix", section: "Match", defaultValue: "/" },
+      { name: "serviceName", label: "Backend Service", section: "Backend", defaultValue: "example-service" },
+      { name: "servicePort", label: "Backend Port", section: "Backend", type: "number", defaultValue: "80" },
+    ],
+    buildCreateResource: (values) => ({
+      apiVersion: "gateway.networking.k8s.io/v1",
+      kind: "HTTPRoute",
+      metadata: { name: stringValue(values.name, "example-http-route"), namespace: stringValue(values.namespace, "default") },
+      spec: {
+        parentRefs: [{ name: stringValue(values.parentGateway, "example-gateway"), ...(stringValue(values.sectionName) ? { sectionName: stringValue(values.sectionName) } : {}) }],
+        hostnames: [stringValue(values.host, "example.local")],
+        rules: [{
+          matches: [{ path: { type: "PathPrefix", value: stringValue(values.path, "/") } }],
+          backendRefs: [{ name: stringValue(values.serviceName, "example-service"), port: numberValue(values.servicePort, 80) }],
+        }],
+      },
+    }),
+    statusPath: ["status", "parents", "0", "conditions", "0", "type"],
+    detailSections: (r) => [{ title: "HTTPRoute", items: [{ label: "Parents", value: getRecord(r.spec).parentRefs }, { label: "Hostnames", value: getRecord(r.spec).hostnames }, { label: "Rules", value: getRecord(r.spec).rules }, { label: "Status Parents", value: getRecord(r.status).parents }] }],
+    extraColumns: [{ label: "Hostnames", value: (r) => (getRecord(r.spec).hostnames as string[] | undefined)?.join(", ") || "N/A" }],
+    createTemplate: `apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: example-http-route
+  namespace: default
+spec:
+  parentRefs: []
+  rules: []
+`,
+  },
+  calicoNetworkPolicies: {
+    id: "networkpolicies",
+    path: "/networks/calico/network-policies",
+    title: "Calico Network Policies",
+    subtitle: "Manage Calico namespaced NetworkPolicy resources",
+    listPath: "/apis/projectcalico.org/v3/networkpolicies",
+    namespaced: true,
+    resourcePath: "/apis/projectcalico.org/v3",
+    kind: "NetworkPolicy",
+    createFields: [
+      ...namespaceNameFields("example-calico-policy"),
+      { name: "selector", label: "Selector", section: "Policy", defaultValue: "all()" },
+      { name: "types", label: "Types", section: "Policy", type: "select", defaultValue: "Ingress", options: [{ label: "Ingress", value: "Ingress" }, { label: "Egress", value: "Egress" }, { label: "Ingress and Egress", value: "Both" }] },
+      { name: "action", label: "Action", section: "Rule", type: "select", defaultValue: "Allow", options: [{ label: "Allow", value: "Allow" }, { label: "Deny", value: "Deny" }, { label: "Pass", value: "Pass" }, { label: "Log", value: "Log" }] },
+      { name: "protocol", label: "Protocol", section: "Rule", defaultValue: "TCP" },
+      { name: "destinationPort", label: "Destination Port", section: "Rule", type: "number", defaultValue: "80" },
+    ],
+    buildCreateResource: (values) => {
+      const types = stringValue(values.types, "Ingress") === "Both" ? ["Ingress", "Egress"] : [stringValue(values.types, "Ingress")];
+      const rule = { action: stringValue(values.action, "Allow"), protocol: stringValue(values.protocol, "TCP"), destination: { ports: [numberValue(values.destinationPort, 80)] } };
+      return {
+        apiVersion: "projectcalico.org/v3",
+        kind: "NetworkPolicy",
+        metadata: { name: stringValue(values.name, "example-calico-policy"), namespace: stringValue(values.namespace, "default") },
+        spec: { selector: stringValue(values.selector, "all()"), types, ...(types.includes("Ingress") ? { ingress: [rule] } : {}), ...(types.includes("Egress") ? { egress: [rule] } : {}) },
+      };
+    },
+    statusPath: ["spec", "selector"],
+    detailSections: (r) => [{ title: "Calico Policy", items: [{ label: "Selector", value: getRecord(r.spec).selector }, { label: "Types", value: getRecord(r.spec).types }, { label: "Ingress", value: getRecord(r.spec).ingress }, { label: "Egress", value: getRecord(r.spec).egress }] }],
+    extraColumns: [{ label: "Selector", value: (r) => String(getRecord(r.spec).selector || "N/A") }],
+    createTemplate: `apiVersion: projectcalico.org/v3
+kind: NetworkPolicy
+metadata:
+  name: example-calico-policy
+  namespace: default
+spec:
+  selector: all()
+`,
+  },
+  calicoGlobalNetworkPolicies: {
+    id: "globalnetworkpolicies",
+    path: "/networks/calico/global-network-policies",
+    title: "Calico Global Network Policies",
+    subtitle: "Manage Calico cluster-scoped GlobalNetworkPolicy resources",
+    listPath: "/apis/projectcalico.org/v3/globalnetworkpolicies",
+    namespaced: false,
+    resourcePath: "/apis/projectcalico.org/v3",
+    kind: "GlobalNetworkPolicy",
+    createFields: [
+      ...nameOnlyFields("example-global-policy"),
+      { name: "selector", label: "Selector", section: "Policy", defaultValue: "all()" },
+      { name: "order", label: "Order", section: "Policy", type: "number", defaultValue: "100" },
+      { name: "types", label: "Types", section: "Policy", type: "select", defaultValue: "Ingress", options: [{ label: "Ingress", value: "Ingress" }, { label: "Egress", value: "Egress" }, { label: "Ingress and Egress", value: "Both" }] },
+    ],
+    buildCreateResource: (values) => ({
+      apiVersion: "projectcalico.org/v3",
+      kind: "GlobalNetworkPolicy",
+      metadata: { name: stringValue(values.name, "example-global-policy") },
+      spec: { selector: stringValue(values.selector, "all()"), order: numberValue(values.order, 100), types: stringValue(values.types, "Ingress") === "Both" ? ["Ingress", "Egress"] : [stringValue(values.types, "Ingress")] },
+    }),
+    statusPath: ["spec", "selector"],
+    detailSections: (r) => [{ title: "Calico Global Policy", items: [{ label: "Order", value: getRecord(r.spec).order }, { label: "Selector", value: getRecord(r.spec).selector }, { label: "Types", value: getRecord(r.spec).types }] }],
+    extraColumns: [{ label: "Order", value: (r) => String(getRecord(r.spec).order || "N/A") }],
+    createTemplate: `apiVersion: projectcalico.org/v3
+kind: GlobalNetworkPolicy
+metadata:
+  name: example-global-policy
+spec:
+  selector: all()
+`,
+  },
+  calicoIPPools: {
+    id: "ippools",
+    path: "/networks/calico/ip-pools",
+    title: "Calico IP Pools",
+    subtitle: "Manage Calico IPPool resources",
+    listPath: "/apis/projectcalico.org/v3/ippools",
+    namespaced: false,
+    resourcePath: "/apis/projectcalico.org/v3",
+    kind: "IPPool",
+    createFields: [
+      ...nameOnlyFields("example-pool"),
+      { name: "cidr", label: "CIDR", section: "Pool", defaultValue: "10.244.0.0/16" },
+      { name: "encapsulation", label: "Encapsulation", section: "Pool", type: "select", defaultValue: "VXLAN", options: [{ label: "VXLAN", value: "VXLAN" }, { label: "IPIP", value: "IPIP" }, { label: "None", value: "None" }] },
+      { name: "natOutgoing", label: "NAT Outgoing", section: "Pool", type: "checkbox", defaultValue: true },
+      { name: "disabled", label: "Disabled", section: "Pool", type: "checkbox", defaultValue: false },
+    ],
+    buildCreateResource: (values) => ({
+      apiVersion: "projectcalico.org/v3",
+      kind: "IPPool",
+      metadata: { name: stringValue(values.name, "example-pool") },
+      spec: { cidr: stringValue(values.cidr, "10.244.0.0/16"), encapsulation: stringValue(values.encapsulation, "VXLAN"), natOutgoing: values.natOutgoing === true, disabled: values.disabled === true },
+    }),
+    statusPath: ["spec", "cidr"],
+    detailSections: (r) => [{ title: "IPPool", items: [{ label: "CIDR", value: getRecord(r.spec).cidr }, { label: "Encapsulation", value: getRecord(r.spec).encapsulation }, { label: "NAT Outgoing", value: getRecord(r.spec).natOutgoing }, { label: "Disabled", value: getRecord(r.spec).disabled }] }],
+    extraColumns: [{ label: "CIDR", value: (r) => String(getRecord(r.spec).cidr || "N/A") }],
+    createTemplate: `apiVersion: projectcalico.org/v3
+kind: IPPool
+metadata:
+  name: example-pool
+spec:
+  cidr: 10.244.0.0/16
+`,
+  },
+  calicoTiers: calicoResourceConfig({
+    plural: "tiers",
+    path: "/networks/calico/tiers",
+    title: "Calico Tiers",
+    subtitle: "Manage Calico policy ordering tiers",
+    kind: "Tier",
+    createFields: [{ name: "order", label: "Order", section: "Tier", type: "number", defaultValue: "100" }, { name: "defaultAction", label: "Default Action", section: "Tier", type: "select", defaultValue: "Deny", options: [{ label: "Deny", value: "Deny" }, { label: "Pass", value: "Pass" }] }],
+    buildSpec: (values) => ({ order: numberValue(values.order, 100), defaultAction: stringValue(values.defaultAction, "Deny") }),
+    statusPath: ["spec", "order"],
+    extraColumns: [{ label: "Order", value: (r) => String(getRecord(r.spec).order || "N/A") }],
+  }),
+  calicoNetworkSets: calicoResourceConfig({
+    plural: "networksets",
+    path: "/networks/calico/network-sets",
+    title: "Calico Network Sets",
+    subtitle: "Manage namespaced Calico NetworkSet CIDR groups",
+    kind: "NetworkSet",
+    namespaced: true,
+    createFields: [{ name: "nets", label: "CIDRs", section: "Networks", defaultValue: "10.0.0.0/8", placeholder: "comma-separated CIDRs" }],
+    buildSpec: (values) => ({ nets: csvList(values.nets) }),
+    statusPath: ["spec", "nets", "0"],
+    extraColumns: [{ label: "CIDRs", value: (r) => ((getRecord(r.spec).nets as string[] | undefined) || []).join(", ") || "N/A" }],
+  }),
+  calicoGlobalNetworkSets: calicoResourceConfig({
+    plural: "globalnetworksets",
+    path: "/networks/calico/global-network-sets",
+    title: "Calico Global Network Sets",
+    subtitle: "Manage cluster-scoped Calico GlobalNetworkSet CIDR groups",
+    kind: "GlobalNetworkSet",
+    createFields: [{ name: "nets", label: "CIDRs", section: "Networks", defaultValue: "10.0.0.0/8", placeholder: "comma-separated CIDRs" }],
+    buildSpec: (values) => ({ nets: csvList(values.nets) }),
+    statusPath: ["spec", "nets", "0"],
+    extraColumns: [{ label: "CIDRs", value: (r) => ((getRecord(r.spec).nets as string[] | undefined) || []).join(", ") || "N/A" }],
+  }),
+  calicoStagedNetworkPolicies: calicoResourceConfig({
+    plural: "stagednetworkpolicies",
+    path: "/networks/calico/staged-network-policies",
+    title: "Calico Staged Network Policies",
+    subtitle: "Manage namespaced Calico staged NetworkPolicy resources",
+    kind: "StagedNetworkPolicy",
+    namespaced: true,
+    createFields: [{ name: "selector", label: "Selector", section: "Policy", defaultValue: "all()" }, { name: "types", label: "Types", section: "Policy", defaultValue: "Ingress" }],
+    buildSpec: (values) => ({ selector: stringValue(values.selector, "all()"), types: [stringValue(values.types, "Ingress")] }),
+    statusPath: ["spec", "selector"],
+  }),
+  calicoStagedGlobalNetworkPolicies: calicoResourceConfig({
+    plural: "stagedglobalnetworkpolicies",
+    path: "/networks/calico/staged-global-network-policies",
+    title: "Calico Staged Global Policies",
+    subtitle: "Manage cluster-scoped Calico staged GlobalNetworkPolicy resources",
+    kind: "StagedGlobalNetworkPolicy",
+    createFields: [{ name: "selector", label: "Selector", section: "Policy", defaultValue: "all()" }, { name: "order", label: "Order", section: "Policy", type: "number", defaultValue: "100" }],
+    buildSpec: (values) => ({ selector: stringValue(values.selector, "all()"), order: numberValue(values.order, 100) }),
+    statusPath: ["spec", "selector"],
+  }),
+  calicoStagedKubernetesNetworkPolicies: calicoResourceConfig({
+    plural: "stagedkubernetesnetworkpolicies",
+    path: "/networks/calico/staged-kubernetes-network-policies",
+    title: "Calico Staged Kubernetes Policies",
+    subtitle: "Manage staged Kubernetes NetworkPolicy resources in Calico",
+    kind: "StagedKubernetesNetworkPolicy",
+    namespaced: true,
+    createFields: [{ name: "selectorKey", label: "Pod Selector Key", section: "Policy", defaultValue: "app" }, { name: "selectorValue", label: "Pod Selector Value", section: "Policy", defaultValue: "example" }],
+    buildSpec: (values) => ({ podSelector: selectorFromValues(values), policyTypes: ["Ingress"] }),
+    statusPath: ["spec", "policyTypes", "0"],
+  }),
+  calicoHostEndpoints: calicoResourceConfig({
+    plural: "hostendpoints",
+    path: "/networks/calico/host-endpoints",
+    title: "Calico Host Endpoints",
+    subtitle: "Manage Calico HostEndpoint resources",
+    kind: "HostEndpoint",
+    createFields: [{ name: "node", label: "Node", section: "Endpoint", defaultValue: "" }, { name: "interfaceName", label: "Interface Name", section: "Endpoint", defaultValue: "*" }, { name: "expectedIPs", label: "Expected IPs", section: "Endpoint", defaultValue: "", placeholder: "comma-separated IPs" }],
+    buildSpec: (values) => ({ ...(stringValue(values.node) ? { node: stringValue(values.node) } : {}), interfaceName: stringValue(values.interfaceName, "*"), ...(csvList(values.expectedIPs).length ? { expectedIPs: csvList(values.expectedIPs) } : {}) }),
+    statusPath: ["spec", "node"],
+  }),
+  calicoBGPConfigurations: calicoResourceConfig({ plural: "bgpconfigurations", path: "/networks/calico/bgp-configurations", title: "Calico BGP Configurations", subtitle: "Manage Calico BGPConfiguration resources", kind: "BGPConfiguration", createFields: [{ name: "asNumber", label: "AS Number", section: "BGP", type: "number", defaultValue: "64512" }], buildSpec: (values) => ({ asNumber: numberValue(values.asNumber, 64512) }), statusPath: ["spec", "asNumber"] }),
+  calicoBGPPeers: calicoResourceConfig({ plural: "bgppeers", path: "/networks/calico/bgp-peers", title: "Calico BGP Peers", subtitle: "Manage Calico BGPPeer resources", kind: "BGPPeer", createFields: [{ name: "peerIP", label: "Peer IP", section: "BGP", defaultValue: "192.0.2.1" }, { name: "asNumber", label: "Peer AS Number", section: "BGP", type: "number", defaultValue: "64512" }], buildSpec: (values) => ({ peerIP: stringValue(values.peerIP, "192.0.2.1"), asNumber: numberValue(values.asNumber, 64512) }), statusPath: ["spec", "peerIP"] }),
+  calicoBGPFilters: calicoResourceConfig({ plural: "bgpfilters", path: "/networks/calico/bgp-filters", title: "Calico BGP Filters", subtitle: "Manage Calico BGPFilter resources", kind: "BGPFilter", buildSpec: () => ({}) }),
+  calicoFelixConfigurations: calicoResourceConfig({ plural: "felixconfigurations", path: "/networks/calico/felix-configurations", title: "Calico Felix Configurations", subtitle: "Manage Calico FelixConfiguration resources", kind: "FelixConfiguration", buildSpec: () => ({}) }),
+  calicoKubeControllersConfigurations: calicoResourceConfig({ plural: "kubecontrollersconfigurations", path: "/networks/calico/kube-controllers-configurations", title: "Calico Kube Controllers Configurations", subtitle: "Manage Calico KubeControllersConfiguration resources", kind: "KubeControllersConfiguration", buildSpec: () => ({}) }),
+  calicoIPReservations: calicoResourceConfig({ plural: "ipreservations", path: "/networks/calico/ip-reservations", title: "Calico IP Reservations", subtitle: "Manage Calico IPReservation resources", kind: "IPReservation", createFields: [{ name: "reservedCIDRs", label: "Reserved CIDRs", section: "Reservation", defaultValue: "10.244.0.10/32", placeholder: "comma-separated CIDRs" }], buildSpec: (values) => ({ reservedCIDRs: csvList(values.reservedCIDRs) }), statusPath: ["spec", "reservedCIDRs", "0"] }),
+  calicoBlockAffinities: calicoResourceConfig({ plural: "blockaffinities", path: "/networks/calico/block-affinities", title: "Calico Block Affinities", subtitle: "Inspect Calico IPAM block affinity resources", kind: "BlockAffinity", allowCreate: false, allowDelete: false, statusPath: ["spec", "state"] }),
+  calicoCalicoNodeStatuses: calicoResourceConfig({ plural: "caliconodestatuses", path: "/networks/calico/node-statuses", title: "Calico Node Statuses", subtitle: "Inspect CalicoNodeStatus resources", kind: "CalicoNodeStatus", allowCreate: false, allowDelete: false, statusPath: ["status", "agent", "birdV4", "state"] }),
+  calicoClusterInformations: calicoResourceConfig({ plural: "clusterinformations", path: "/networks/calico/cluster-informations", title: "Calico Cluster Information", subtitle: "Inspect Calico ClusterInformation resources", kind: "ClusterInformation", allowCreate: false, allowDelete: false, statusPath: ["spec", "calicoVersion"] }),
+  calicoIPAMBlocks: calicoResourceConfig({ plural: "ipamblocks", path: "/networks/calico/ipam-blocks", title: "Calico IPAM Blocks", subtitle: "Inspect Calico IPAMBlock resources", kind: "IPAMBlock", allowCreate: false, allowDelete: false, statusPath: ["spec", "cidr"] }),
+  calicoIPAMConfigs: calicoResourceConfig({ plural: "ipamconfigs", path: "/networks/calico/ipam-configs", title: "Calico IPAM Configs", subtitle: "Inspect Calico IPAMConfig resources", kind: "IPAMConfig", allowCreate: false, allowDelete: false }),
+  calicoIPAMHandles: calicoResourceConfig({ plural: "ipamhandles", path: "/networks/calico/ipam-handles", title: "Calico IPAM Handles", subtitle: "Inspect Calico IPAMHandle resources", kind: "IPAMHandle", allowCreate: false, allowDelete: false }),
+  ciliumNetworkPolicies: {
+    id: "ciliumnetworkpolicies",
+    path: "/networks/cilium/network-policies",
+    title: "Cilium Network Policies",
+    subtitle: "Manage CiliumNetworkPolicy resources",
+    listPath: "/apis/cilium.io/v2/ciliumnetworkpolicies",
+    namespaced: true,
+    resourcePath: "/apis/cilium.io/v2",
+    kind: "CiliumNetworkPolicy",
+    createFields: [
+      ...namespaceNameFields("example-cilium-policy"),
+      { name: "selectorKey", label: "Endpoint Selector Key", section: "Selector", defaultValue: "app" },
+      { name: "selectorValue", label: "Endpoint Selector Value", section: "Selector", defaultValue: "example" },
+      { name: "cidr", label: "Allowed CIDR", section: "Ingress", defaultValue: "0.0.0.0/0" },
+      { name: "port", label: "TCP Port", section: "Ingress", type: "number", defaultValue: "80" },
+    ],
+    buildCreateResource: (values) => ({
+      apiVersion: "cilium.io/v2",
+      kind: "CiliumNetworkPolicy",
+      metadata: { name: stringValue(values.name, "example-cilium-policy"), namespace: stringValue(values.namespace, "default") },
+      spec: {
+        endpointSelector: selectorFromValues(values),
+        ingress: [{ fromCIDR: [stringValue(values.cidr, "0.0.0.0/0")], toPorts: [{ ports: [{ port: stringValue(values.port, "80"), protocol: "TCP" }] }] }],
+      },
+    }),
+    statusPath: ["status", "conditions", "0", "type"],
+    detailSections: (r) => [{ title: "Cilium Policy", items: [{ label: "Endpoint Selector", value: getRecord(r.spec).endpointSelector }, { label: "Ingress", value: getRecord(r.spec).ingress }, { label: "Egress", value: getRecord(r.spec).egress }, { label: "Conditions", value: getRecord(r.status).conditions }] }],
+    extraColumns: [{ label: "Selector", value: (r) => selectorText(getRecord(getRecord(r.spec).endpointSelector).matchLabels) || "N/A" }],
+    createTemplate: `apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: example-cilium-policy
+  namespace: default
+spec:
+  endpointSelector: {}
+`,
+  },
+  ciliumClusterwideNetworkPolicies: {
+    id: "ciliumclusterwidenetworkpolicies",
+    path: "/networks/cilium/clusterwide-network-policies",
+    title: "Cilium Clusterwide Policies",
+    subtitle: "Manage CiliumClusterwideNetworkPolicy resources",
+    listPath: "/apis/cilium.io/v2/ciliumclusterwidenetworkpolicies",
+    namespaced: false,
+    resourcePath: "/apis/cilium.io/v2",
+    kind: "CiliumClusterwideNetworkPolicy",
+    createFields: [
+      ...nameOnlyFields("example-cilium-cluster-policy"),
+      { name: "selectorKey", label: "Endpoint Selector Key", section: "Selector", defaultValue: "app" },
+      { name: "selectorValue", label: "Endpoint Selector Value", section: "Selector", defaultValue: "example" },
+      { name: "cidr", label: "Allowed CIDR", section: "Ingress", defaultValue: "0.0.0.0/0" },
+    ],
+    buildCreateResource: (values) => ({
+      apiVersion: "cilium.io/v2",
+      kind: "CiliumClusterwideNetworkPolicy",
+      metadata: { name: stringValue(values.name, "example-cilium-cluster-policy") },
+      spec: { endpointSelector: selectorFromValues(values), ingress: [{ fromCIDR: [stringValue(values.cidr, "0.0.0.0/0")] }] },
+    }),
+    statusPath: ["status", "conditions", "0", "type"],
+    detailSections: (r) => [{ title: "Cilium Clusterwide Policy", items: [{ label: "Endpoint Selector", value: getRecord(r.spec).endpointSelector }, { label: "Ingress", value: getRecord(r.spec).ingress }, { label: "Egress", value: getRecord(r.spec).egress }, { label: "Conditions", value: getRecord(r.status).conditions }] }],
+    extraColumns: [{ label: "Selector", value: (r) => selectorText(getRecord(getRecord(r.spec).endpointSelector).matchLabels) || "N/A" }],
+    createTemplate: `apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: example-cilium-cluster-policy
+spec:
+  endpointSelector: {}
+`,
+  },
+  ciliumNodes: {
+    id: "ciliumnodes",
+    path: "/networks/cilium/nodes",
+    title: "Cilium Nodes",
+    subtitle: "Inspect CiliumNode resources",
+    listPath: "/apis/cilium.io/v2/ciliumnodes",
+    namespaced: false,
+    resourcePath: "/apis/cilium.io/v2",
+    kind: "CiliumNode",
+    allowCreate: false,
+    allowDelete: false,
+    statusPath: ["spec", "health", "ipv4"],
+    detailSections: (r) => [{ title: "Cilium Node", items: [{ label: "Addresses", value: getRecord(r.spec).addresses }, { label: "Health", value: getRecord(r.spec).health }, { label: "IPAM", value: getRecord(r.spec).ipam }, { label: "Encryption", value: getRecord(r.spec).encryption }] }],
+    extraColumns: [{ label: "Health IPv4", value: (r) => String(getRecord(getRecord(r.spec).health).ipv4 || "N/A") }],
+    createTemplate: `apiVersion: cilium.io/v2
+kind: CiliumNode
+metadata:
+  name: example-node
+`,
+  },
+  ciliumEndpoints: ciliumResourceConfig({ plural: "ciliumendpoints", path: "/networks/cilium/endpoints", title: "Cilium Endpoints", subtitle: "Inspect CiliumEndpoint workload state", kind: "CiliumEndpoint", namespaced: true, allowCreate: false, allowDelete: false, statusPath: ["status", "state"] }),
+  ciliumEndpointSlices: ciliumResourceConfig({ version: "v2alpha1", plural: "ciliumendpointslices", path: "/networks/cilium/endpoint-slices", title: "Cilium Endpoint Slices", subtitle: "Inspect CiliumEndpointSlice resources", kind: "CiliumEndpointSlice", allowCreate: false, allowDelete: false, statusPath: ["status", "state"] }),
+  ciliumIdentities: ciliumResourceConfig({ plural: "ciliumidentities", path: "/networks/cilium/identities", title: "Cilium Identities", subtitle: "Inspect CiliumIdentity resources", kind: "CiliumIdentity", allowCreate: false, allowDelete: false, statusPath: ["security-labels", "0"] }),
+  ciliumEnvoyConfigs: ciliumResourceConfig({ plural: "ciliumenvoyconfigs", path: "/networks/cilium/envoy-configs", title: "Cilium Envoy Configs", subtitle: "Manage namespaced CiliumEnvoyConfig resources", kind: "CiliumEnvoyConfig", namespaced: true, buildSpec: () => ({ resources: [] }), statusPath: ["status", "conditions", "0", "type"] }),
+  ciliumClusterwideEnvoyConfigs: ciliumResourceConfig({ plural: "ciliumclusterwideenvoyconfigs", path: "/networks/cilium/clusterwide-envoy-configs", title: "Cilium Clusterwide Envoy Configs", subtitle: "Manage cluster-scoped CiliumClusterwideEnvoyConfig resources", kind: "CiliumClusterwideEnvoyConfig", buildSpec: () => ({ resources: [] }), statusPath: ["status", "conditions", "0", "type"] }),
+  ciliumCIDRGroups: ciliumResourceConfig({ plural: "ciliumcidrgroups", path: "/networks/cilium/cidr-groups", title: "Cilium CIDR Groups", subtitle: "Manage reusable Cilium CIDR groups", kind: "CiliumCIDRGroup", createFields: [{ name: "cidrs", label: "CIDRs", section: "CIDR", defaultValue: "10.0.0.0/8", placeholder: "comma-separated CIDRs" }], buildSpec: (values) => ({ externalCIDRs: csvList(values.cidrs) }), statusPath: ["spec", "externalCIDRs", "0"] }),
+  ciliumEgressGatewayPolicies: ciliumResourceConfig({ plural: "ciliumegressgatewaypolicies", path: "/networks/cilium/egress-gateway-policies", title: "Cilium Egress Gateway Policies", subtitle: "Manage Cilium egress gateway policies", kind: "CiliumEgressGatewayPolicy", createFields: [{ name: "selectorKey", label: "Pod Selector Key", section: "Selector", defaultValue: "app" }, { name: "selectorValue", label: "Pod Selector Value", section: "Selector", defaultValue: "example" }, { name: "destinationCIDRs", label: "Destination CIDRs", section: "Destination", defaultValue: "0.0.0.0/0" }, { name: "egressGatewayNodeSelectorKey", label: "Gateway Node Selector Key", section: "Gateway", defaultValue: "kubernetes.io/hostname" }, { name: "egressGatewayNodeSelectorValue", label: "Gateway Node Selector Value", section: "Gateway", defaultValue: "" }], buildSpec: (values) => ({ selectors: [{ podSelector: selectorFromValues(values) }], destinationCIDRs: csvList(values.destinationCIDRs), egressGateway: { nodeSelector: { matchLabels: { [stringValue(values.egressGatewayNodeSelectorKey, "kubernetes.io/hostname")]: stringValue(values.egressGatewayNodeSelectorValue) } } } }), statusPath: ["status", "conditions", "0", "type"] }),
+  ciliumLoadBalancerIPPools: ciliumResourceConfig({ plural: "ciliumloadbalancerippools", path: "/networks/cilium/load-balancer-ip-pools", title: "Cilium Load Balancer IP Pools", subtitle: "Manage Cilium LoadBalancer IP pools", kind: "CiliumLoadBalancerIPPool", createFields: [{ name: "cidr", label: "CIDR", section: "Pool", defaultValue: "192.0.2.0/24" }, { name: "disabled", label: "Disabled", section: "Pool", type: "checkbox", defaultValue: false }], buildSpec: (values) => ({ blocks: [{ cidr: stringValue(values.cidr, "192.0.2.0/24") }], disabled: values.disabled === true }), statusPath: ["status", "conditions", "0", "type"] }),
+  ciliumLocalRedirectPolicies: ciliumResourceConfig({ plural: "ciliumlocalredirectpolicies", path: "/networks/cilium/local-redirect-policies", title: "Cilium Local Redirect Policies", subtitle: "Manage CiliumLocalRedirectPolicy resources", kind: "CiliumLocalRedirectPolicy", namespaced: true, createFields: [{ name: "selectorKey", label: "Backend Selector Key", section: "Backend", defaultValue: "app" }, { name: "selectorValue", label: "Backend Selector Value", section: "Backend", defaultValue: "example" }], buildSpec: (values) => ({ redirectBackend: { localEndpointSelector: selectorFromValues(values) } }), statusPath: ["status", "conditions", "0", "type"] }),
+  ciliumL2AnnouncementPolicies: ciliumResourceConfig({ version: "v2alpha1", plural: "ciliuml2announcementpolicies", path: "/networks/cilium/l2-announcement-policies", title: "Cilium L2 Announcement Policies", subtitle: "Manage Cilium L2 announcement policies", kind: "CiliumL2AnnouncementPolicy", createFields: [{ name: "interfaces", label: "Interfaces", section: "L2", defaultValue: "", placeholder: "comma-separated; empty means all" }, { name: "externalIPs", label: "External IPs", section: "L2", type: "checkbox", defaultValue: true }, { name: "loadBalancerIPs", label: "LoadBalancer IPs", section: "L2", type: "checkbox", defaultValue: true }], buildSpec: (values) => ({ ...(csvList(values.interfaces).length ? { interfaces: csvList(values.interfaces) } : {}), externalIPs: values.externalIPs === true, loadBalancerIPs: values.loadBalancerIPs === true }), statusPath: ["status", "conditions", "0", "type"] }),
+  ciliumPodIPPools: ciliumResourceConfig({ version: "v2alpha1", plural: "ciliumpodippools", path: "/networks/cilium/pod-ip-pools", title: "Cilium Pod IP Pools", subtitle: "Manage CiliumPodIPPool resources", kind: "CiliumPodIPPool", createFields: [{ name: "cidrs", label: "CIDRs", section: "Pool", defaultValue: "10.10.0.0/16", placeholder: "comma-separated CIDRs" }], buildSpec: (values) => ({ ipv4: { cidrs: csvList(values.cidrs) } }), statusPath: ["status", "conditions", "0", "type"] }),
+  ciliumGatewayClassConfigs: ciliumResourceConfig({ version: "v2alpha1", plural: "ciliumgatewayclassconfigs", path: "/networks/cilium/gateway-class-configs", title: "Cilium Gateway Class Configs", subtitle: "Manage Cilium Gateway API class configs", kind: "CiliumGatewayClassConfig", namespaced: true, buildSpec: () => ({}), statusPath: ["status", "conditions", "0", "type"] }),
+  ciliumNodeConfigs: ciliumResourceConfig({ plural: "ciliumnodeconfigs", path: "/networks/cilium/node-configs", title: "Cilium Node Configs", subtitle: "Manage namespaced CiliumNodeConfig resources", kind: "CiliumNodeConfig", namespaced: true, buildSpec: () => ({ defaults: {} }), statusPath: ["status", "conditions", "0", "type"] }),
+  ciliumDatapathPlugins: ciliumResourceConfig({ version: "v2alpha1", plural: "ciliumdatapathplugins", path: "/networks/cilium/datapath-plugins", title: "Cilium Datapath Plugins", subtitle: "Manage Cilium datapath plugin resources", kind: "CiliumDatapathPlugin", buildSpec: () => ({}), statusPath: ["status", "conditions", "0", "type"] }),
+  ciliumBGPAdvertisements: ciliumResourceConfig({ plural: "ciliumbgpadvertisements", path: "/networks/cilium/bgp-advertisements", title: "Cilium BGP Advertisements", subtitle: "Manage Cilium BGPAdvertisement resources", kind: "CiliumBGPAdvertisement", buildSpec: () => ({ advertisements: [] }), statusPath: ["status", "conditions", "0", "type"] }),
+  ciliumBGPClusterConfigs: ciliumResourceConfig({ plural: "ciliumbgpclusterconfigs", path: "/networks/cilium/bgp-cluster-configs", title: "Cilium BGP Cluster Configs", subtitle: "Manage Cilium BGPClusterConfig resources", kind: "CiliumBGPClusterConfig", buildSpec: () => ({ bgpInstances: [] }), statusPath: ["status", "conditions", "0", "type"] }),
+  ciliumBGPNodeConfigs: ciliumResourceConfig({ plural: "ciliumbgpnodeconfigs", path: "/networks/cilium/bgp-node-configs", title: "Cilium BGP Node Configs", subtitle: "Inspect Cilium BGP node config resources", kind: "CiliumBGPNodeConfig", allowCreate: false, allowDelete: false, statusPath: ["status", "conditions", "0", "type"] }),
+  ciliumBGPNodeConfigOverrides: ciliumResourceConfig({ plural: "ciliumbgpnodeconfigoverrides", path: "/networks/cilium/bgp-node-config-overrides", title: "Cilium BGP Node Config Overrides", subtitle: "Manage Cilium BGP node override resources", kind: "CiliumBGPNodeConfigOverride", buildSpec: () => ({}), statusPath: ["status", "conditions", "0", "type"] }),
+  ciliumBGPPeerConfigs: ciliumResourceConfig({ plural: "ciliumbgppeerconfigs", path: "/networks/cilium/bgp-peer-configs", title: "Cilium BGP Peer Configs", subtitle: "Manage Cilium BGPPeerConfig resources", kind: "CiliumBGPPeerConfig", createFields: [{ name: "peerASN", label: "Peer ASN", section: "BGP", type: "number", defaultValue: "64512" }], buildSpec: (values) => ({ families: [], timers: {}, authSecretRef: "", gracefulRestart: {}, transport: {}, ebgpMultihop: 1, peerASN: numberValue(values.peerASN, 64512) }), statusPath: ["status", "conditions", "0", "type"] }),
+  kubeOvnSubnets: {
+    id: "subnets",
+    path: "/networks/kube-ovn/subnets",
+    title: "Kube-OVN Subnets",
+    subtitle: "Manage Kube-OVN Subnet resources",
+    listPath: "/apis/kubeovn.io/v1/subnets",
+    namespaced: false,
+    resourcePath: "/apis/kubeovn.io/v1",
+    kind: "Subnet",
+    createFields: [
+      ...nameOnlyFields("example-subnet"),
+      { name: "cidrBlock", label: "CIDR Block", section: "Subnet", defaultValue: "10.16.0.0/16" },
+      { name: "gateway", label: "Gateway", section: "Subnet", defaultValue: "10.16.0.1" },
+      { name: "protocol", label: "Protocol", section: "Subnet", type: "select", defaultValue: "IPv4", options: [{ label: "IPv4", value: "IPv4" }, { label: "IPv6", value: "IPv6" }, { label: "Dual", value: "Dual" }] },
+      { name: "vpc", label: "VPC", section: "Subnet", defaultValue: "ovn-cluster" },
+      { name: "natOutgoing", label: "NAT Outgoing", section: "Subnet", type: "checkbox", defaultValue: true },
+    ],
+    buildCreateResource: (values) => ({
+      apiVersion: "kubeovn.io/v1",
+      kind: "Subnet",
+      metadata: { name: stringValue(values.name, "example-subnet") },
+      spec: { cidrBlock: stringValue(values.cidrBlock, "10.16.0.0/16"), gateway: stringValue(values.gateway, "10.16.0.1"), protocol: stringValue(values.protocol, "IPv4"), vpc: stringValue(values.vpc, "ovn-cluster"), natOutgoing: values.natOutgoing === true },
+    }),
+    statusPath: ["status", "ready"],
+    detailSections: (r) => [{ title: "Subnet", items: [{ label: "CIDR", value: getRecord(r.spec).cidrBlock }, { label: "Gateway", value: getRecord(r.spec).gateway }, { label: "VPC", value: getRecord(r.spec).vpc }, { label: "NAT Outgoing", value: getRecord(r.spec).natOutgoing }, { label: "Status", value: r.status }] }],
+    extraColumns: [{ label: "CIDR", value: (r) => String(getRecord(r.spec).cidrBlock || "N/A") }, { label: "VPC", value: (r) => String(getRecord(r.spec).vpc || "N/A") }],
+    createTemplate: `apiVersion: kubeovn.io/v1
+kind: Subnet
+metadata:
+  name: example-subnet
+spec:
+  cidrBlock: 10.16.0.0/16
+`,
+  },
+  kubeOvnVpcs: {
+    id: "vpcs",
+    path: "/networks/kube-ovn/vpcs",
+    title: "Kube-OVN VPCs",
+    subtitle: "Manage Kube-OVN VPC resources",
+    listPath: "/apis/kubeovn.io/v1/vpcs",
+    namespaced: false,
+    resourcePath: "/apis/kubeovn.io/v1",
+    kind: "Vpc",
+    createFields: [
+      ...nameOnlyFields("example-vpc"),
+      { name: "namespaces", label: "Namespaces", section: "VPC", defaultValue: "", placeholder: "comma separated, optional" },
+      { name: "staticRoutes", label: "Static Route CIDR", section: "Routing", defaultValue: "", placeholder: "optional" },
+      { name: "nextHopIP", label: "Next Hop IP", section: "Routing", defaultValue: "", placeholder: "optional" },
+    ],
+    buildCreateResource: (values) => {
+      const namespaces = stringValue(values.namespaces).split(",").map((item) => item.trim()).filter(Boolean);
+      const staticRoutes = stringValue(values.staticRoutes) && stringValue(values.nextHopIP)
+        ? [{ cidr: stringValue(values.staticRoutes), nextHopIP: stringValue(values.nextHopIP), policy: "policyDst" }]
+        : [];
+      return {
+        apiVersion: "kubeovn.io/v1",
+        kind: "Vpc",
+        metadata: { name: stringValue(values.name, "example-vpc") },
+        spec: { ...(namespaces.length ? { namespaces } : {}), ...(staticRoutes.length ? { staticRoutes } : {}) },
+      };
+    },
+    statusPath: ["status", "ready"],
+    detailSections: (r) => [{ title: "VPC", items: [{ label: "Namespaces", value: getRecord(r.spec).namespaces }, { label: "Static Routes", value: getRecord(r.spec).staticRoutes }, { label: "Status", value: r.status }] }],
+    extraColumns: [{ label: "Namespaces", value: (r) => listNames(getRecord(r.spec).namespaces) || "N/A" }],
+    createTemplate: `apiVersion: kubeovn.io/v1
+kind: Vpc
+metadata:
+  name: example-vpc
+spec: {}
+`,
+  },
+  kubeOvnProviderNetworks: {
+    id: "provider-networks",
+    path: "/networks/kube-ovn/provider-networks",
+    title: "Kube-OVN Provider Networks",
+    subtitle: "Manage Kube-OVN ProviderNetwork resources",
+    listPath: "/apis/kubeovn.io/v1/provider-networks",
+    namespaced: false,
+    resourcePath: "/apis/kubeovn.io/v1",
+    kind: "ProviderNetwork",
+    createFields: [
+      ...nameOnlyFields("provider-net"),
+      { name: "defaultInterface", label: "Default Interface", section: "Provider Network", defaultValue: "eth0" },
+      { name: "excludeNodes", label: "Exclude Nodes", section: "Provider Network", defaultValue: "", placeholder: "comma separated, optional" },
+    ],
+    buildCreateResource: (values) => ({
+      apiVersion: "kubeovn.io/v1",
+      kind: "ProviderNetwork",
+      metadata: { name: stringValue(values.name, "provider-net") },
+      spec: { defaultInterface: stringValue(values.defaultInterface, "eth0"), excludeNodes: stringValue(values.excludeNodes).split(",").map((item) => item.trim()).filter(Boolean) },
+    }),
+    statusPath: ["status", "ready"],
+    detailSections: (r) => [{ title: "Provider Network", items: [{ label: "Default Interface", value: getRecord(r.spec).defaultInterface }, { label: "Exclude Nodes", value: getRecord(r.spec).excludeNodes }, { label: "Status", value: r.status }] }],
+    extraColumns: [{ label: "Interface", value: (r) => String(getRecord(r.spec).defaultInterface || "N/A") }],
+    createTemplate: `apiVersion: kubeovn.io/v1
+kind: ProviderNetwork
+metadata:
+  name: provider-net
+spec:
+  defaultInterface: eth0
+`,
+  },
+  kubeOvnVlans: {
+    id: "vlans",
+    path: "/networks/kube-ovn/vlans",
+    title: "Kube-OVN VLANs",
+    subtitle: "Manage Kube-OVN Vlan resources",
+    listPath: "/apis/kubeovn.io/v1/vlans",
+    namespaced: false,
+    resourcePath: "/apis/kubeovn.io/v1",
+    kind: "Vlan",
+    createFields: [
+      ...nameOnlyFields("vlan100"),
+      { name: "id", label: "VLAN ID", section: "VLAN", type: "number", defaultValue: "100" },
+      { name: "provider", label: "Provider Network", section: "VLAN", defaultValue: "provider-net" },
+    ],
+    buildCreateResource: (values) => ({
+      apiVersion: "kubeovn.io/v1",
+      kind: "Vlan",
+      metadata: { name: stringValue(values.name, "vlan100") },
+      spec: { id: numberValue(values.id, 100), provider: stringValue(values.provider, "provider-net") },
+    }),
+    statusPath: ["spec", "id"],
+    detailSections: (r) => [{ title: "VLAN", items: [{ label: "ID", value: getRecord(r.spec).id }, { label: "Provider", value: getRecord(r.spec).provider }, { label: "Status", value: r.status }] }],
+    extraColumns: [{ label: "VLAN ID", value: (r) => String(getRecord(r.spec).id || "N/A") }, { label: "Provider", value: (r) => String(getRecord(r.spec).provider || "N/A") }],
+    createTemplate: `apiVersion: kubeovn.io/v1
+kind: Vlan
+metadata:
+  name: vlan100
+spec:
+  id: 100
+  provider: provider-net
+`,
+  },
+  kubeOvnIPPools: kubeOvnResourceConfig({
+    plural: "ippools",
+    path: "/networks/kube-ovn/ip-pools",
+    title: "Kube-OVN IP Pools",
+    subtitle: "Manage Kube-OVN IPPool resources",
+    kind: "IPPool",
+    createFields: [
+      { name: "subnet", label: "Subnet", section: "IP Pool", defaultValue: "example-subnet" },
+      { name: "ips", label: "IPs", section: "IP Pool", defaultValue: "", placeholder: "comma separated" },
+    ],
+    buildSpec: (values) => ({ subnet: stringValue(values.subnet), ips: csvList(values.ips) }),
+    statusPath: ["spec", "subnet"],
+    extraColumns: [{ label: "Subnet", value: (r) => String(getRecord(r.spec).subnet || "N/A") }],
+  }),
+  kubeOvnIPs: kubeOvnResourceConfig({
+    plural: "ips",
+    path: "/networks/kube-ovn/ips",
+    title: "Kube-OVN IPs",
+    subtitle: "Inspect Kube-OVN allocated IP resources",
+    kind: "IP",
+    allowCreate: false,
+    allowDelete: false,
+    statusPath: ["spec", "subnet"],
+    extraColumns: [
+      { label: "Subnet", value: (r) => String(getRecord(r.spec).subnet || "N/A") },
+      { label: "V4 IP", value: (r) => String(getRecord(r.spec).v4IPAddress || getRecord(r.spec).ipAddress || "N/A") },
+    ],
+  }),
+  kubeOvnVpcNatGateways: kubeOvnResourceConfig({
+    plural: "vpc-nat-gateways",
+    path: "/networks/kube-ovn/vpc-nat-gateways",
+    title: "Kube-OVN VPC NAT Gateways",
+    subtitle: "Manage Kube-OVN VpcNatGateway resources",
+    kind: "VpcNatGateway",
+    createFields: [
+      { name: "namespace", label: "Workload Namespace", section: "Gateway", defaultValue: "default" },
+      { name: "vpc", label: "VPC", section: "Gateway", defaultValue: "ovn-cluster" },
+      { name: "subnet", label: "Subnet", section: "Gateway", defaultValue: "example-subnet" },
+      { name: "lanIp", label: "LAN IP", section: "Gateway", defaultValue: "", placeholder: "optional" },
+      { name: "externalSubnets", label: "External Subnets", section: "Gateway", defaultValue: "", placeholder: "comma separated" },
+      { name: "replicas", label: "Replicas", section: "Gateway", type: "number", defaultValue: "1" },
+    ],
+    buildSpec: (values) => ({
+      namespace: stringValue(values.namespace, "default"),
+      vpc: stringValue(values.vpc, "ovn-cluster"),
+      subnet: stringValue(values.subnet, "example-subnet"),
+      ...(stringValue(values.lanIp) ? { lanIp: stringValue(values.lanIp) } : {}),
+      externalSubnets: csvList(values.externalSubnets),
+      replicas: numberValue(values.replicas, 1),
+    }),
+    statusPath: ["status", "ready"],
+    extraColumns: [
+      { label: "VPC", value: (r) => String(getRecord(r.spec).vpc || "N/A") },
+      { label: "Subnet", value: (r) => String(getRecord(r.spec).subnet || "N/A") },
+    ],
+  }),
+  kubeOvnIptablesEIPs: kubeOvnResourceConfig({
+    plural: "iptables-eips",
+    path: "/networks/kube-ovn/iptables-eips",
+    title: "Kube-OVN Iptables EIPs",
+    subtitle: "Manage Kube-OVN IptablesEIP resources",
+    kind: "IptablesEIP",
+    createFields: [
+      { name: "natGwDp", label: "NAT Gateway", section: "EIP", defaultValue: "vpc-nat-gw" },
+      { name: "externalSubnet", label: "External Subnet", section: "EIP", defaultValue: "external-subnet" },
+      { name: "v4ip", label: "IPv4", section: "EIP", defaultValue: "", placeholder: "optional" },
+      { name: "macAddress", label: "MAC Address", section: "EIP", defaultValue: "", placeholder: "optional" },
+      { name: "qosPolicy", label: "QoS Policy", section: "EIP", defaultValue: "", placeholder: "optional" },
+    ],
+    buildSpec: (values) => ({
+      natGwDp: stringValue(values.natGwDp),
+      externalSubnet: stringValue(values.externalSubnet),
+      ...(stringValue(values.v4ip) ? { v4ip: stringValue(values.v4ip) } : {}),
+      ...(stringValue(values.macAddress) ? { macAddress: stringValue(values.macAddress) } : {}),
+      ...(stringValue(values.qosPolicy) ? { qosPolicy: stringValue(values.qosPolicy) } : {}),
+    }),
+    statusPath: ["status", "ready"],
+    extraColumns: [
+      { label: "External Subnet", value: (r) => String(getRecord(r.spec).externalSubnet || "N/A") },
+      { label: "NAT Gateway", value: (r) => String(getRecord(r.spec).natGwDp || "N/A") },
+    ],
+  }),
+  kubeOvnIptablesDnatRules: kubeOvnResourceConfig({
+    plural: "iptables-dnat-rules",
+    path: "/networks/kube-ovn/iptables-dnat-rules",
+    title: "Kube-OVN Iptables DNAT Rules",
+    subtitle: "Manage Kube-OVN IptablesDnatRule resources",
+    kind: "IptablesDnatRule",
+    createFields: [
+      { name: "eip", label: "EIP", section: "DNAT", defaultValue: "example-eip" },
+      { name: "externalPort", label: "External Port", section: "DNAT", defaultValue: "8080" },
+      { name: "internalIp", label: "Internal IP", section: "DNAT", defaultValue: "10.16.0.10" },
+      { name: "internalPort", label: "Internal Port", section: "DNAT", defaultValue: "80" },
+      { name: "protocol", label: "Protocol", section: "DNAT", type: "select", defaultValue: "tcp", options: [{ label: "tcp", value: "tcp" }, { label: "udp", value: "udp" }] },
+    ],
+    buildSpec: (values) => ({ eip: stringValue(values.eip), externalPort: stringValue(values.externalPort), internalIp: stringValue(values.internalIp), internalPort: stringValue(values.internalPort), protocol: stringValue(values.protocol, "tcp") }),
+    statusPath: ["status", "ready"],
+    extraColumns: [{ label: "EIP", value: (r) => String(getRecord(r.spec).eip || "N/A") }],
+  }),
+  kubeOvnIptablesSnatRules: kubeOvnResourceConfig({
+    plural: "iptables-snat-rules",
+    path: "/networks/kube-ovn/iptables-snat-rules",
+    title: "Kube-OVN Iptables SNAT Rules",
+    subtitle: "Manage Kube-OVN IptablesSnatRule resources",
+    kind: "IptablesSnatRule",
+    createFields: [
+      { name: "eip", label: "EIP", section: "SNAT", defaultValue: "example-eip" },
+      { name: "internalCIDR", label: "Internal CIDR", section: "SNAT", defaultValue: "10.16.0.0/24" },
+    ],
+    buildSpec: (values) => ({ eip: stringValue(values.eip), internalCIDR: stringValue(values.internalCIDR) }),
+    statusPath: ["status", "ready"],
+    extraColumns: [{ label: "EIP", value: (r) => String(getRecord(r.spec).eip || "N/A") }],
+  }),
+  kubeOvnIptablesFIPRules: kubeOvnResourceConfig({
+    plural: "iptables-fip-rules",
+    path: "/networks/kube-ovn/iptables-fip-rules",
+    title: "Kube-OVN Iptables FIP Rules",
+    subtitle: "Manage Kube-OVN IptablesFIPRule resources",
+    kind: "IptablesFIPRule",
+    createFields: [
+      { name: "eip", label: "EIP", section: "FIP", defaultValue: "example-eip" },
+      { name: "internalIp", label: "Internal IP", section: "FIP", defaultValue: "10.16.0.10" },
+    ],
+    buildSpec: (values) => ({ eip: stringValue(values.eip), internalIp: stringValue(values.internalIp) }),
+    statusPath: ["status", "ready"],
+    extraColumns: [{ label: "EIP", value: (r) => String(getRecord(r.spec).eip || "N/A") }],
+  }),
+  kubeOvnOvnEips: kubeOvnResourceConfig({
+    plural: "ovn-eips",
+    path: "/networks/kube-ovn/ovn-eips",
+    title: "Kube-OVN OVN EIPs",
+    subtitle: "Manage Kube-OVN OvnEip resources",
+    kind: "OvnEip",
+    createFields: [
+      { name: "externalSubnet", label: "External Subnet", section: "EIP", defaultValue: "external-subnet" },
+      { name: "v4ip", label: "IPv4", section: "EIP", defaultValue: "", placeholder: "optional" },
+      { name: "type", label: "Type", section: "EIP", defaultValue: "", placeholder: "optional" },
+    ],
+    buildSpec: (values) => ({ externalSubnet: stringValue(values.externalSubnet), ...(stringValue(values.v4ip) ? { v4ip: stringValue(values.v4ip) } : {}), ...(stringValue(values.type) ? { type: stringValue(values.type) } : {}) }),
+    statusPath: ["status", "ready"],
+    extraColumns: [{ label: "External Subnet", value: (r) => String(getRecord(r.spec).externalSubnet || "N/A") }],
+  }),
+  kubeOvnOvnDnatRules: kubeOvnResourceConfig({
+    plural: "ovn-dnat-rules",
+    path: "/networks/kube-ovn/ovn-dnat-rules",
+    title: "Kube-OVN OVN DNAT Rules",
+    subtitle: "Manage Kube-OVN OvnDnatRule resources",
+    kind: "OvnDnatRule",
+    createFields: [
+      { name: "eip", label: "OVN EIP", section: "DNAT", defaultValue: "example-ovn-eip" },
+      { name: "externalPort", label: "External Port", section: "DNAT", defaultValue: "8080" },
+      { name: "internalIp", label: "Internal IP", section: "DNAT", defaultValue: "10.16.0.10" },
+      { name: "internalPort", label: "Internal Port", section: "DNAT", defaultValue: "80" },
+      { name: "protocol", label: "Protocol", section: "DNAT", type: "select", defaultValue: "tcp", options: [{ label: "tcp", value: "tcp" }, { label: "udp", value: "udp" }] },
+    ],
+    buildSpec: (values) => ({ eip: stringValue(values.eip), externalPort: stringValue(values.externalPort), internalIp: stringValue(values.internalIp), internalPort: stringValue(values.internalPort), protocol: stringValue(values.protocol, "tcp") }),
+    statusPath: ["status", "ready"],
+    extraColumns: [{ label: "EIP", value: (r) => String(getRecord(r.spec).eip || "N/A") }],
+  }),
+  kubeOvnOvnSnatRules: kubeOvnResourceConfig({
+    plural: "ovn-snat-rules",
+    path: "/networks/kube-ovn/ovn-snat-rules",
+    title: "Kube-OVN OVN SNAT Rules",
+    subtitle: "Manage Kube-OVN OvnSnatRule resources",
+    kind: "OvnSnatRule",
+    createFields: [
+      { name: "eip", label: "OVN EIP", section: "SNAT", defaultValue: "example-ovn-eip" },
+      { name: "vpcSubnet", label: "VPC Subnet", section: "SNAT", defaultValue: "10.16.0.0/24" },
+    ],
+    buildSpec: (values) => ({ eip: stringValue(values.eip), vpcSubnet: stringValue(values.vpcSubnet) }),
+    statusPath: ["status", "ready"],
+    extraColumns: [{ label: "EIP", value: (r) => String(getRecord(r.spec).eip || "N/A") }],
+  }),
+  kubeOvnOvnFips: kubeOvnResourceConfig({
+    plural: "ovn-fips",
+    path: "/networks/kube-ovn/ovn-fips",
+    title: "Kube-OVN OVN FIPs",
+    subtitle: "Manage Kube-OVN OvnFip resources",
+    kind: "OvnFip",
+    createFields: [
+      { name: "ovnEip", label: "OVN EIP", section: "FIP", defaultValue: "example-ovn-eip" },
+      { name: "ipName", label: "IP Name", section: "FIP", defaultValue: "example-ip" },
+      { name: "type", label: "Type", section: "FIP", defaultValue: "", placeholder: "optional" },
+    ],
+    buildSpec: (values) => ({ ovnEip: stringValue(values.ovnEip), ipName: stringValue(values.ipName), ...(stringValue(values.type) ? { type: stringValue(values.type) } : {}) }),
+    statusPath: ["status", "ready"],
+    extraColumns: [{ label: "OVN EIP", value: (r) => String(getRecord(r.spec).ovnEip || "N/A") }],
+  }),
+  kubeOvnVips: kubeOvnResourceConfig({
+    plural: "vips",
+    path: "/networks/kube-ovn/vips",
+    title: "Kube-OVN VIPs",
+    subtitle: "Manage Kube-OVN Vip resources",
+    kind: "Vip",
+    createFields: [
+      { name: "subnet", label: "Subnet", section: "VIP", defaultValue: "example-subnet" },
+      { name: "v4ip", label: "IPv4", section: "VIP", defaultValue: "", placeholder: "optional" },
+      { name: "attachSubnets", label: "Attach Subnets", section: "VIP", defaultValue: "", placeholder: "comma separated" },
+    ],
+    buildSpec: (values) => ({ subnet: stringValue(values.subnet), ...(stringValue(values.v4ip) ? { v4ip: stringValue(values.v4ip) } : {}), attachSubnets: csvList(values.attachSubnets) }),
+    statusPath: ["spec", "subnet"],
+    extraColumns: [{ label: "Subnet", value: (r) => String(getRecord(r.spec).subnet || "N/A") }],
+  }),
+  kubeOvnSwitchLBRules: kubeOvnResourceConfig({
+    plural: "switch-lb-rules",
+    path: "/networks/kube-ovn/switch-lb-rules",
+    title: "Kube-OVN Switch LB Rules",
+    subtitle: "Manage Kube-OVN SwitchLBRule resources",
+    kind: "SwitchLBRule",
+    createFields: [
+      { name: "vip", label: "VIP", section: "Load Balancer", defaultValue: "10.16.0.100" },
+      { name: "ports", label: "Ports", section: "Load Balancer", defaultValue: "80" },
+      { name: "sessionAffinity", label: "Session Affinity", section: "Load Balancer", defaultValue: "", placeholder: "optional" },
+    ],
+    buildSpec: (values) => ({ vip: stringValue(values.vip), ports: csvList(values.ports), ...(stringValue(values.sessionAffinity) ? { sessionAffinity: stringValue(values.sessionAffinity) } : {}) }),
+    statusPath: ["status", "service"],
+    extraColumns: [{ label: "VIP", value: (r) => String(getRecord(r.spec).vip || "N/A") }],
+  }),
+  kubeOvnVpcDnses: kubeOvnResourceConfig({
+    plural: "vpc-dnses",
+    path: "/networks/kube-ovn/vpc-dnses",
+    title: "Kube-OVN VPC DNS",
+    subtitle: "Manage Kube-OVN VpcDns resources",
+    kind: "VpcDns",
+    createFields: [
+      { name: "vpc", label: "VPC", section: "DNS", defaultValue: "ovn-cluster" },
+      { name: "subnet", label: "Subnet", section: "DNS", defaultValue: "example-subnet" },
+      { name: "replicas", label: "Replicas", section: "DNS", type: "number", defaultValue: "1" },
+    ],
+    buildSpec: (values) => ({ vpc: stringValue(values.vpc), subnet: stringValue(values.subnet), replicas: numberValue(values.replicas, 1) }),
+    statusPath: ["status", "active"],
+    extraColumns: [{ label: "VPC", value: (r) => String(getRecord(r.spec).vpc || "N/A") }, { label: "Subnet", value: (r) => String(getRecord(r.spec).subnet || "N/A") }],
+  }),
+  kubeOvnVpcEgressGateways: kubeOvnResourceConfig({
+    plural: "vpc-egress-gateways",
+    path: "/networks/kube-ovn/vpc-egress-gateways",
+    title: "Kube-OVN VPC Egress Gateways",
+    subtitle: "Manage Kube-OVN VpcEgressGateway resources",
+    kind: "VpcEgressGateway",
+    namespaced: true,
+    createFields: [
+      { name: "vpc", label: "VPC", section: "Gateway", defaultValue: "ovn-cluster" },
+      { name: "externalSubnet", label: "External Subnet", section: "Gateway", defaultValue: "external-subnet" },
+      { name: "internalSubnet", label: "Internal Subnet", section: "Gateway", defaultValue: "example-subnet" },
+      { name: "replicas", label: "Replicas", section: "Gateway", type: "number", defaultValue: "1" },
+    ],
+    buildSpec: (values) => ({ vpc: stringValue(values.vpc), externalSubnet: stringValue(values.externalSubnet), internalSubnet: stringValue(values.internalSubnet), replicas: numberValue(values.replicas, 1) }),
+    statusPath: ["status", "ready"],
+    extraColumns: [{ label: "External Subnet", value: (r) => String(getRecord(r.spec).externalSubnet || "N/A") }],
+  }),
+  kubeOvnQoSPolicies: kubeOvnResourceConfig({
+    plural: "qos-policies",
+    path: "/networks/kube-ovn/qos-policies",
+    title: "Kube-OVN QoS Policies",
+    subtitle: "Manage Kube-OVN QoSPolicy resources",
+    kind: "QoSPolicy",
+    createFields: [
+      { name: "bandwidthLimitRules", label: "Bandwidth Limit Rules", section: "QoS", type: "textarea", defaultValue: "", placeholder: "advanced YAML/JSON-like values can be edited in manifest after create" },
+    ],
+    buildSpec: () => ({}),
+    statusPath: ["status", "shared"],
+  }),
+  kubeOvnSecurityGroups: kubeOvnResourceConfig({
+    plural: "security-groups",
+    path: "/networks/kube-ovn/security-groups",
+    title: "Kube-OVN Security Groups",
+    subtitle: "Manage Kube-OVN SecurityGroup resources",
+    kind: "SecurityGroup",
+    createFields: [
+      { name: "allowSameGroupTraffic", label: "Allow Same Group Traffic", section: "Security Group", type: "checkbox", defaultValue: true },
+      { name: "ingressRules", label: "Ingress Rules", section: "Security Group", type: "textarea", defaultValue: "", placeholder: "edit detailed rules in manifest" },
+    ],
+    buildSpec: (values) => ({ allowSameGroupTraffic: values.allowSameGroupTraffic === true }),
+    statusPath: ["status", "allowSameGroupTraffic"],
+  }),
+  kubeOvnBgpConfs: kubeOvnResourceConfig({ plural: "bgp-confs", path: "/networks/kube-ovn/bgp-confs", title: "Kube-OVN BGP Configs", subtitle: "Manage Kube-OVN BgpConf resources", kind: "BgpConf", buildSpec: () => ({}), statusPath: ["status", "active"] }),
+  kubeOvnEvpnConfs: kubeOvnResourceConfig({ plural: "evpn-confs", path: "/networks/kube-ovn/evpn-confs", title: "Kube-OVN EVPN Configs", subtitle: "Manage Kube-OVN EvpnConf resources", kind: "EvpnConf", buildSpec: () => ({}), statusPath: ["status", "active"] }),
+  kubeOvnDNSNameResolvers: kubeOvnResourceConfig({
+    plural: "dnsnameresolvers",
+    path: "/networks/kube-ovn/dns-name-resolvers",
+    title: "Kube-OVN DNS Name Resolvers",
+    subtitle: "Manage Kube-OVN DNSNameResolver resources",
+    kind: "DNSNameResolver",
+    createFields: [
+      { name: "names", label: "DNS Names", section: "Resolver", defaultValue: "example.com", placeholder: "comma separated" },
+    ],
+    buildSpec: (values) => ({ names: csvList(values.names) }),
+    statusPath: ["status", "resolved"],
+  }),
   horizontalpodautoscalers: {
     id: "horizontalpodautoscalers",
     path: "/autoscaling",
@@ -2377,10 +3567,209 @@ function DVDetailContent() {
 
 function resourceRoutes(config: ResourceConfig) {
   return [
-    <Route key={`${config.id}-list`} path={config.path} element={<ResourceList config={config} />} />,
-    <Route key={`${config.id}-detail`} path={`${config.path}/:namespace/:name`} element={<ResourceDetail config={config} />} />,
-    <Route key={`${config.id}-manifest`} path={`${config.path}/:namespace/:name/manifest`} element={<ResourceManifest config={config} />} />,
+    <Route key={`${config.path}-list`} path={config.path} element={<ResourceList config={config} />} />,
+    <Route key={`${config.path}-detail`} path={`${config.path}/:namespace/:name`} element={<ResourceDetail config={config} />} />,
+    <Route key={`${config.path}-manifest`} path={`${config.path}/:namespace/:name/manifest`} element={<ResourceManifest config={config} />} />,
   ];
+}
+
+type NetworkResourceGroup = {
+  slug: string;
+  title: string;
+  description: string;
+  resources: ResourceConfig[];
+};
+
+const networkResourceGroups: NetworkResourceGroup[] = [
+  {
+    slug: "kubernetes",
+    title: "Kubernetes",
+    description: "Core Service, Endpoint, Ingress, NetworkPolicy, IngressClass, and Multus resources.",
+    resources: [
+      resourceConfigs.kubernetesServices,
+      resourceConfigs.endpoints,
+      resourceConfigs.endpointSlices,
+      resourceConfigs["network-attachment-definitions"],
+      resourceConfigs.networkpolicies,
+      resourceConfigs.ingresses,
+      resourceConfigs.ingressClasses,
+    ],
+  },
+  {
+    slug: "gateway-api",
+    title: "Gateway API",
+    description: "GatewayClass, Gateway, and HTTPRoute routing resources.",
+    resources: [
+      resourceConfigs.gatewayclasses,
+      resourceConfigs.gateways,
+      resourceConfigs.httproutes,
+    ],
+  },
+  {
+    slug: "calico",
+    title: "Calico",
+    description: "Calico policy, BGP, IPAM, host endpoint, tier, and controller resources.",
+    resources: [
+      resourceConfigs.calicoNetworkPolicies,
+      resourceConfigs.calicoGlobalNetworkPolicies,
+      resourceConfigs.calicoIPPools,
+      resourceConfigs.calicoTiers,
+      resourceConfigs.calicoNetworkSets,
+      resourceConfigs.calicoGlobalNetworkSets,
+      resourceConfigs.calicoStagedNetworkPolicies,
+      resourceConfigs.calicoStagedGlobalNetworkPolicies,
+      resourceConfigs.calicoStagedKubernetesNetworkPolicies,
+      resourceConfigs.calicoHostEndpoints,
+      resourceConfigs.calicoBGPConfigurations,
+      resourceConfigs.calicoBGPPeers,
+      resourceConfigs.calicoBGPFilters,
+      resourceConfigs.calicoFelixConfigurations,
+      resourceConfigs.calicoKubeControllersConfigurations,
+      resourceConfigs.calicoIPReservations,
+      resourceConfigs.calicoBlockAffinities,
+      resourceConfigs.calicoCalicoNodeStatuses,
+      resourceConfigs.calicoClusterInformations,
+      resourceConfigs.calicoIPAMBlocks,
+      resourceConfigs.calicoIPAMConfigs,
+      resourceConfigs.calicoIPAMHandles,
+    ],
+  },
+  {
+    slug: "cilium",
+    title: "Cilium",
+    description: "Cilium policy, endpoint, BGP, Envoy, IP pool, egress, L2, and Gateway resources.",
+    resources: [
+      resourceConfigs.ciliumNetworkPolicies,
+      resourceConfigs.ciliumClusterwideNetworkPolicies,
+      resourceConfigs.ciliumNodes,
+      resourceConfigs.ciliumEndpoints,
+      resourceConfigs.ciliumEndpointSlices,
+      resourceConfigs.ciliumIdentities,
+      resourceConfigs.ciliumEnvoyConfigs,
+      resourceConfigs.ciliumClusterwideEnvoyConfigs,
+      resourceConfigs.ciliumCIDRGroups,
+      resourceConfigs.ciliumEgressGatewayPolicies,
+      resourceConfigs.ciliumLoadBalancerIPPools,
+      resourceConfigs.ciliumLocalRedirectPolicies,
+      resourceConfigs.ciliumL2AnnouncementPolicies,
+      resourceConfigs.ciliumPodIPPools,
+      resourceConfigs.ciliumGatewayClassConfigs,
+      resourceConfigs.ciliumNodeConfigs,
+      resourceConfigs.ciliumDatapathPlugins,
+      resourceConfigs.ciliumBGPAdvertisements,
+      resourceConfigs.ciliumBGPClusterConfigs,
+      resourceConfigs.ciliumBGPNodeConfigs,
+      resourceConfigs.ciliumBGPNodeConfigOverrides,
+      resourceConfigs.ciliumBGPPeerConfigs,
+    ],
+  },
+  {
+    slug: "kube-ovn",
+    title: "Kube-OVN",
+    description: "Kube-OVN subnet, VPC, NAT, egress, IP, policy, and provider network resources.",
+    resources: [
+      resourceConfigs.kubeOvnSubnets,
+      resourceConfigs.kubeOvnVpcs,
+      resourceConfigs.kubeOvnProviderNetworks,
+      resourceConfigs.kubeOvnVlans,
+      resourceConfigs.kubeOvnIPPools,
+      resourceConfigs.kubeOvnIPs,
+      resourceConfigs.kubeOvnVpcNatGateways,
+      resourceConfigs.kubeOvnIptablesEIPs,
+      resourceConfigs.kubeOvnIptablesDnatRules,
+      resourceConfigs.kubeOvnIptablesSnatRules,
+      resourceConfigs.kubeOvnIptablesFIPRules,
+      resourceConfigs.kubeOvnOvnEips,
+      resourceConfigs.kubeOvnOvnDnatRules,
+      resourceConfigs.kubeOvnOvnSnatRules,
+      resourceConfigs.kubeOvnOvnFips,
+      resourceConfigs.kubeOvnVips,
+      resourceConfigs.kubeOvnSwitchLBRules,
+      resourceConfigs.kubeOvnVpcDnses,
+      resourceConfigs.kubeOvnVpcEgressGateways,
+      resourceConfigs.kubeOvnQoSPolicies,
+      resourceConfigs.kubeOvnSecurityGroups,
+      resourceConfigs.kubeOvnBgpConfs,
+      resourceConfigs.kubeOvnEvpnConfs,
+      resourceConfigs.kubeOvnDNSNameResolvers,
+    ],
+  },
+];
+
+function NetworkManagementPage() {
+  return (
+    <div className="space-y-5 animate-in fade-in duration-500">
+      <div className="flex flex-col gap-1">
+        <h1 className="text-2xl font-bold">Networks</h1>
+        <p className="text-sm text-muted-foreground">Choose a network provider or API group before managing concrete resources.</p>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {networkResourceGroups.map((group) => (
+          <Link key={group.slug} to={`/networks/${group.slug}`} className="block">
+            <ShadCard className="h-full transition-colors hover:bg-muted/50">
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-2">
+                    <Network className="h-4 w-4 text-muted-foreground" />
+                    <CardTitle className="text-sm">{group.title}</CardTitle>
+                  </div>
+                  <Badge variant="outline">{group.resources.length}</Badge>
+                </div>
+                <CardDescription>{group.description}</CardDescription>
+              </CardHeader>
+            </ShadCard>
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function NetworkCategoryPage() {
+  const { category } = useParams();
+  const group = networkResourceGroups.find((item) => item.slug === category);
+
+  if (!group) {
+    return <div className="p-20 text-center text-muted-foreground border-2 border-dashed rounded-lg mt-12">Network category not found</div>;
+  }
+
+  return (
+    <div className="space-y-5 animate-in fade-in duration-500">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Link to="/networks" className="hover:text-primary">Networks</Link>
+            <span>/</span>
+            <span>{group.title}</span>
+          </div>
+          <h1 className="text-2xl font-bold">{group.title}</h1>
+          <p className="text-sm text-muted-foreground">{group.description}</p>
+        </div>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {group.resources.map((config) => (
+          <Link key={config.path} to={config.path} className="block">
+            <ShadCard className="h-full transition-colors hover:bg-muted/50">
+              <CardHeader className="pb-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <CardTitle className="text-sm">{config.title}</CardTitle>
+                    <CardDescription className="mt-1 line-clamp-2">{config.subtitle}</CardDescription>
+                  </div>
+                  <Badge variant="outline">{config.namespaced ? "Namespaced" : "Cluster"}</Badge>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="text-xs text-muted-foreground">{config.kind}</div>
+              </CardContent>
+            </ShadCard>
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function App() {
@@ -2399,6 +3788,8 @@ function App() {
               <Route path="/dvs" element={<DVList />} />
               <Route path="/dvs/:namespace/:name" element={<Navigate to="overview" replace />} />
               <Route path="/dvs/:namespace/:name/:tab" element={<DVDetailContent />} />
+              <Route path="/networks" element={<NetworkManagementPage />} />
+              <Route path="/networks/:category" element={<NetworkCategoryPage />} />
               {Object.values(resourceConfigs).flatMap(resourceRoutes)}
               <Route path="*" element={<div className="p-20 text-center text-muted-foreground border-2 border-dashed rounded-lg mt-12">Page not found</div>} />
             </Routes>
