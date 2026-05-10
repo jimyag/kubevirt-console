@@ -50,6 +50,7 @@ type KubeResource = {
     uid?: string
     creationTimestamp?: string
     labels?: Record<string, string>
+    annotations?: Record<string, string>
   }
   spec?: Record<string, unknown>
   status?: Record<string, unknown>
@@ -59,6 +60,7 @@ type KubeResource = {
 export type CreateFormField = {
   name: string
   label: string
+  section?: string
   type?: "text" | "number" | "textarea" | "select" | "checkbox"
   defaultValue?: string | boolean | ((resource: KubeResource) => string | boolean)
   placeholder?: string
@@ -140,8 +142,102 @@ const compactValue = (value: unknown): string => {
   if (value === undefined || value === null || value === "") return "N/A"
   if (typeof value === "boolean") return value ? "true" : "false"
   if (Array.isArray(value)) return value.length ? value.map(compactValue).join(", ") : "None"
-  if (typeof value === "object") return JSON.stringify(value)
+  if (typeof value === "object") return `${Object.keys(value as Record<string, unknown>).length} fields`
   return String(value)
+}
+
+const isPrimitiveDetailValue = (value: unknown) =>
+  value === undefined ||
+  value === null ||
+  ["string", "number", "boolean"].includes(typeof value)
+
+const conditionStatusVariant = (status?: unknown) => statusVariant(String(status || ""))
+
+function DetailValue({ value }: { value: unknown }) {
+  if (isPrimitiveDetailValue(value)) {
+    return <span>{compactValue(value)}</span>
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) return <span>None</span>
+
+    const conditionLike = value.every((item) => item && typeof item === "object" && "type" in (item as Record<string, unknown>))
+    if (conditionLike) {
+      return (
+        <div className="grid gap-2">
+          {value.map((item, index) => {
+            const condition = item as Record<string, unknown>
+            return (
+              <div key={`${String(condition.type || "condition")}-${index}`} className="rounded-lg border bg-muted/30 px-3 py-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-medium text-foreground">{compactValue(condition.type)}</span>
+                  <Badge variant={conditionStatusVariant(condition.status)}>{compactValue(condition.status)}</Badge>
+                </div>
+                {Boolean(condition.reason || condition.message) && (
+                  <p className="mt-1 break-words text-xs text-muted-foreground">
+                    {[condition.reason, condition.message].filter(Boolean).map(compactValue).join(" - ")}
+                  </p>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )
+    }
+
+    return (
+      <div className="flex flex-wrap gap-1.5">
+        {value.slice(0, 12).map((item, index) => (
+          <span key={index} className="rounded-md border bg-muted px-2 py-1 text-xs text-foreground">
+            {compactValue(item)}
+          </span>
+        ))}
+        {value.length > 12 && <span className="text-xs text-muted-foreground">+{value.length - 12} more</span>}
+      </div>
+    )
+  }
+
+  const entries = Object.entries(value as Record<string, unknown>)
+  if (entries.length === 0) return <span>None</span>
+
+  return (
+    <div className="grid gap-1.5">
+      {entries.slice(0, 12).map(([key, nextValue]) => (
+        <div key={key} className="grid gap-1 rounded-md border bg-muted/30 px-2 py-1.5 sm:grid-cols-[minmax(8rem,14rem)_minmax(0,1fr)]">
+          <span className="min-w-0 break-all text-xs text-muted-foreground">{key}</span>
+          <span className="min-w-0 break-words text-xs text-foreground">{compactValue(nextValue)}</span>
+        </div>
+      ))}
+      {entries.length > 12 && <span className="text-xs text-muted-foreground">+{entries.length - 12} more fields</span>}
+    </div>
+  )
+}
+
+function DetailTabs({ config, namespace, name, active }: { config: ResourceConfig; namespace?: string; name?: string; active: "overview" | "manifest" }) {
+  const scopedNamespace = namespace || "_cluster"
+  const tabs = [
+    { id: "overview", label: "Overview", to: `${config.path}/${scopedNamespace}/${name}` },
+    { id: "manifest", label: "Manifest", to: `${config.path}/${scopedNamespace}/${name}/manifest` },
+  ] as const
+
+  return (
+    <div className="flex gap-1 border-b">
+      {tabs.map((tab) => (
+        <Link
+          key={tab.id}
+          to={tab.to}
+          className={cn(
+            "flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors",
+            active === tab.id
+              ? "border-primary text-foreground"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          )}
+        >
+          {tab.label}
+        </Link>
+      ))}
+    </div>
+  )
 }
 
 const defaultDetailSections = (resource: KubeResource): DetailSection[] => [
@@ -150,13 +246,16 @@ const defaultDetailSections = (resource: KubeResource): DetailSection[] => [
     items: [
       { label: "Name", value: resource.metadata.name },
       { label: "Namespace", value: resource.metadata.namespace || "cluster scoped" },
-      { label: "Created", value: resource.metadata.creationTimestamp ? new Date(resource.metadata.creationTimestamp).toLocaleString() : "N/A" },
+      { label: "Created", value: resource.metadata.creationTimestamp },
       { label: "UID", value: resource.metadata.uid },
     ],
   },
   {
     title: "Status",
-    items: Object.entries(resource.status || {}).slice(0, 8).map(([label, value]) => ({ label, value })),
+    items: Object.entries(resource.status || {})
+      .filter(([, value]) => isPrimitiveDetailValue(value) || (Array.isArray(value) && value.every((item) => item && typeof item === "object" && "type" in (item as Record<string, unknown>))))
+      .slice(0, 8)
+      .map(([label, value]) => ({ label, value })),
   },
 ]
 
@@ -185,6 +284,15 @@ const templateResource = (config: ResourceConfig, values: Record<string, string 
   if (values.name) parsed.metadata.name = String(values.name)
   if (config.namespaced && values.namespace) parsed.metadata.namespace = String(values.namespace)
   return parsed
+}
+
+const groupFields = (fields?: CreateFormField[]) => {
+  const groups = new Map<string, CreateFormField[]>()
+  ;(fields || []).forEach((field) => {
+    const section = field.section || "General"
+    groups.set(section, [...(groups.get(section) || []), field])
+  })
+  return Array.from(groups.entries()).map(([section, items]) => ({ section, items }))
 }
 
 function FormField({ field, value, onChange }: { field: CreateFormField; value: string | boolean; onChange: (value: string | boolean) => void }) {
@@ -247,6 +355,7 @@ export function ResourceCreateDialog({ config, onCreated }: { config: ResourceCo
     () => config.buildCreateResource ? config.buildCreateResource(values) : templateResource(config, values),
     [config, values]
   )
+  const fieldGroups = useMemo(() => groupFields(config.createFields), [config.createFields])
 
   useEffect(() => {
     if (!yamlEdited) {
@@ -307,26 +416,34 @@ export function ResourceCreateDialog({ config, onCreated }: { config: ResourceCo
           Create
         </Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-5xl">
+      <DialogContent className="max-h-[90vh] overflow-hidden sm:max-w-6xl">
         <DialogHeader>
           <DialogTitle>Create {config.kind}</DialogTitle>
           <DialogDescription>Fill the resource fields, review the generated YAML, then submit it to the current cluster context.</DialogDescription>
         </DialogHeader>
-        <div className="grid gap-4 lg:grid-cols-2">
-          <div className="space-y-4">
-            {(config.createFields || []).map((field) => (
-              <FormField
-                key={field.name}
-                field={field}
-                value={values[field.name] ?? ""}
-                onChange={(next) => {
-                  setValues((current) => ({ ...current, [field.name]: next }))
-                  setYamlEdited(false)
-                }}
-              />
+        <div className="grid min-h-0 gap-4 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+          <div className="max-h-[65vh] space-y-4 overflow-y-auto pr-1">
+            {fieldGroups.map((group) => (
+              <div key={group.section} className="rounded-lg border bg-muted/20 p-4">
+                <div className="mb-3 text-sm font-semibold text-foreground">{group.section}</div>
+                <div className="grid gap-4 md:grid-cols-2">
+                  {group.items.map((field) => (
+                    <div key={field.name} className={field.type === "textarea" ? "md:col-span-2" : ""}>
+                      <FormField
+                        field={field}
+                        value={values[field.name] ?? ""}
+                        onChange={(next) => {
+                          setValues((current) => ({ ...current, [field.name]: next }))
+                          setYamlEdited(false)
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
             ))}
           </div>
-          <div className="space-y-3">
+          <div className="min-h-0 space-y-3">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <div className="text-sm font-semibold text-foreground">YAML Preview</div>
@@ -349,7 +466,7 @@ export function ResourceCreateDialog({ config, onCreated }: { config: ResourceCo
                 setYamlEdited(true)
               }}
               className={cn(
-                "min-h-[420px] w-full rounded-lg border bg-muted/30 p-4 font-mono text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                "h-[65vh] min-h-[360px] w-full rounded-lg border bg-muted/30 p-4 font-mono text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 !advanced && "cursor-default"
               )}
               spellCheck={false}
@@ -468,6 +585,7 @@ export function ResourceList({ config }: { config: ResourceConfig }) {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState("")
   const [error, setError] = useState("")
+  const [selected, setSelected] = useState<Record<string, boolean>>({})
 
   const load = async () => {
     setLoading(true)
@@ -501,6 +619,8 @@ export function ResourceList({ config }: { config: ResourceConfig }) {
   const emptyDescription = search
     ? "Clear or change the search text to see other resources."
     : "This API returned an empty list for the current cluster context."
+  const tableColumnCount = 5 + (config.namespaced ? 1 : 0) + (config.extraColumns?.length || 0)
+  const selectedCount = Object.values(selected).filter(Boolean).length
 
   const remove = async (item: KubeResource) => {
     const nsPath = config.namespaced ? `/namespaces/${item.metadata.namespace}` : ""
@@ -509,7 +629,7 @@ export function ResourceList({ config }: { config: ResourceConfig }) {
   }
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-500">
+    <div className="space-y-4 animate-in fade-in duration-500">
       <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div className="flex flex-col gap-1">
           <div className="flex flex-wrap items-center gap-3">
@@ -518,18 +638,29 @@ export function ResourceList({ config }: { config: ResourceConfig }) {
           </div>
           <p className="text-sm text-muted-foreground">{config.subtitle}</p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button size="sm" variant="outline" onClick={load} className="gap-2">
-            <RefreshCw className="h-4 w-4" />
-            Refresh
-          </Button>
-          {config.allowCreate !== false && <ResourceCreateDialog config={config} onCreated={load} />}
-        </div>
       </div>
 
-      <div className="relative max-w-xl">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <Input className="pl-9" placeholder={`Search ${config.title.toLowerCase()}...`} value={search} onChange={(e) => setSearch(e.target.value)} />
+      <div className="flex flex-col gap-3 rounded-lg border bg-card p-2 md:flex-row md:items-center md:justify-between">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" variant="outline" className="gap-2 text-muted-foreground">
+            <span className="size-2 rounded-full bg-muted-foreground/30" />
+            Watch
+          </Button>
+          <Button size="sm" variant="outline" onClick={load} className="gap-2">
+            <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+            Refresh
+          </Button>
+          {selectedCount > 0 && (
+            <Badge variant="outline">{selectedCount} selected</Badge>
+          )}
+        </div>
+        <div className="flex w-full flex-col gap-2 md:w-auto md:flex-row md:items-center">
+          <div className="relative w-full md:w-[320px]">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input className="pl-9" placeholder={`Search ${config.title.toLowerCase()}...`} value={search} onChange={(e) => setSearch(e.target.value)} />
+          </div>
+          {config.allowCreate !== false && <ResourceCreateDialog config={config} onCreated={load} />}
+        </div>
       </div>
 
       {error && (
@@ -544,23 +675,41 @@ export function ResourceList({ config }: { config: ResourceConfig }) {
         </Card>
       )}
 
-      <Card className="p-0 gap-0">
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader>
+      <div className="overflow-hidden rounded-lg border bg-card">
+        <div className="max-h-[calc(100dvh-260px)] overflow-auto">
+          <Table className="min-w-[760px]">
+            <TableHeader className="bg-muted">
               <TableRow>
-                <TableHead>Name</TableHead>
-                {config.namespaced && <TableHead>Namespace</TableHead>}
-                <TableHead>Status</TableHead>
-                {config.extraColumns?.map((column) => <TableHead key={column.label}>{column.label}</TableHead>)}
-                <TableHead className="text-right">Created</TableHead>
+                <TableHead className="w-10">
+                  <input
+                    type="checkbox"
+                    className="size-4 rounded border-border accent-primary"
+                    checked={filtered.length > 0 && filtered.every((item) => selected[item.metadata.uid || item.metadata.name])}
+                    onChange={(event) => {
+                      const checked = event.target.checked
+                      setSelected((current) => {
+                        const next = { ...current }
+                        filtered.forEach((item) => {
+                          next[item.metadata.uid || item.metadata.name] = checked
+                        })
+                        return next
+                      })
+                    }}
+                    aria-label="Select all rows"
+                  />
+                </TableHead>
+                <TableHead className="h-9 px-3 text-xs font-semibold">Name</TableHead>
+                {config.namespaced && <TableHead className="h-9 px-3 text-xs font-semibold">Namespace</TableHead>}
+                <TableHead className="h-9 px-3 text-xs font-semibold">Status</TableHead>
+                {config.extraColumns?.map((column) => <TableHead key={column.label} className="h-9 px-3 text-xs font-semibold">{column.label}</TableHead>)}
+                <TableHead className="h-9 px-3 text-right text-xs font-semibold">Created</TableHead>
                 <TableHead className="w-12" />
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={5 + (config.extraColumns?.length || 0)}>
+                  <TableCell colSpan={tableColumnCount}>
                     <div className="flex h-32 items-center justify-center gap-2">
                       <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted border-t-primary" />
                       <span className="text-sm text-muted-foreground">Loading...</span>
@@ -569,7 +718,7 @@ export function ResourceList({ config }: { config: ResourceConfig }) {
                 </TableRow>
               ) : filtered.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={5 + (config.extraColumns?.length || 0)} className="h-56">
+                  <TableCell colSpan={tableColumnCount} className="h-56">
                     <div className="flex flex-col items-center justify-center gap-3 text-center">
                       <div className="rounded-lg border bg-muted/30 p-3">
                         <Inbox className="h-6 w-6 text-muted-foreground" />
@@ -582,25 +731,36 @@ export function ResourceList({ config }: { config: ResourceConfig }) {
                     </div>
                   </TableCell>
                 </TableRow>
-              ) : filtered.map((item) => (
-                <TableRow key={item.metadata.uid || `${item.metadata.namespace || "_cluster"}-${item.metadata.name}`} className="hover:bg-muted/50">
-                  <TableCell>
+              ) : filtered.map((item) => {
+                const rowKey = item.metadata.uid || `${item.metadata.namespace || "_cluster"}-${item.metadata.name}`
+                return (
+                <TableRow key={rowKey} className="hover:bg-muted/50">
+                  <TableCell className="h-9 px-3 py-1.5">
+                    <input
+                      type="checkbox"
+                      className="size-4 rounded border-border accent-primary"
+                      checked={Boolean(selected[rowKey])}
+                      onChange={(event) => setSelected((current) => ({ ...current, [rowKey]: event.target.checked }))}
+                      aria-label={`Select ${item.metadata.name}`}
+                    />
+                  </TableCell>
+                  <TableCell className="h-9 px-3 py-1.5">
                     <Link
                       to={`${config.path}/${item.metadata.namespace || "_cluster"}/${item.metadata.name}`}
-                      className="font-medium hover:text-primary transition-colors"
+                      className="font-semibold text-primary hover:underline"
                     >
                       {item.metadata.name}
                     </Link>
                   </TableCell>
-                  {config.namespaced && <TableCell className="text-muted-foreground text-sm">{item.metadata.namespace}</TableCell>}
-                  <TableCell><ResourceStatus resource={item} config={config} /></TableCell>
+                  {config.namespaced && <TableCell className="h-9 px-3 py-1.5 text-sm text-muted-foreground">{item.metadata.namespace}</TableCell>}
+                  <TableCell className="h-9 px-3 py-1.5"><ResourceStatus resource={item} config={config} /></TableCell>
                   {config.extraColumns?.map((column) => (
-                    <TableCell key={column.label} className="text-muted-foreground text-sm">{column.value(item) || "N/A"}</TableCell>
+                    <TableCell key={column.label} className="h-9 px-3 py-1.5 text-sm text-muted-foreground">{column.value(item) || "N/A"}</TableCell>
                   ))}
-                  <TableCell className="text-right text-muted-foreground text-sm tabular-nums">
-                    {item.metadata.creationTimestamp ? new Date(item.metadata.creationTimestamp).toLocaleDateString() : "N/A"}
+                  <TableCell className="h-9 px-3 py-1.5 text-right text-sm text-muted-foreground tabular-nums">
+                    {item.metadata.creationTimestamp || "N/A"}
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="h-9 px-3 py-1.5">
                     {config.allowDelete !== false && (
                       <Button
                         variant="ghost"
@@ -614,11 +774,12 @@ export function ResourceList({ config }: { config: ResourceConfig }) {
                     )}
                   </TableCell>
                 </TableRow>
-              ))}
+                )
+              })}
             </TableBody>
           </Table>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   )
 }
@@ -665,8 +826,8 @@ export function ResourceDetail({ config }: { config: ResourceConfig }) {
     )
   }
 
-  const yaml = YAML.dump(resource, { noRefs: true, lineWidth: 120 })
   const labels = Object.entries(resource.metadata.labels || {})
+  const annotations = Object.entries(resource.metadata.annotations || {})
   const reload = (navigateTo?: string) => {
     if (navigateTo) {
       navigate(navigateTo)
@@ -689,7 +850,7 @@ export function ResourceDetail({ config }: { config: ResourceConfig }) {
   ].filter((section) => section.items.length > 0)
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-500">
+    <div className="space-y-5 animate-in fade-in duration-500">
       <div className="flex items-center gap-4">
         <Button variant="ghost" size="icon" onClick={() => navigate(config.path)}>
           <ChevronLeft className="h-5 w-5" />
@@ -710,42 +871,46 @@ export function ResourceDetail({ config }: { config: ResourceConfig }) {
         )}
       </div>
 
-      <div className="grid gap-4 md:grid-cols-3">
+      <DetailTabs config={config} namespace={namespace} name={name} active="overview" />
+
+      <div className="grid gap-3 md:grid-cols-3">
         <Card>
-          <CardHeader>
+          <CardHeader className="pb-3">
             <CardDescription>Kind</CardDescription>
             <CardTitle className="text-sm font-semibold">{resource.kind || config.kind}</CardTitle>
           </CardHeader>
         </Card>
         <Card>
-          <CardHeader>
+          <CardHeader className="pb-3">
             <CardDescription>API Version</CardDescription>
             <CardTitle className="text-sm font-semibold">{resource.apiVersion || "N/A"}</CardTitle>
           </CardHeader>
         </Card>
         <Card>
-          <CardHeader>
+          <CardHeader className="pb-3">
             <CardDescription>Created</CardDescription>
             <CardTitle className="text-sm font-semibold">
-              {resource.metadata.creationTimestamp ? new Date(resource.metadata.creationTimestamp).toLocaleString() : "N/A"}
+              {resource.metadata.creationTimestamp || "N/A"}
             </CardTitle>
           </CardHeader>
         </Card>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid gap-4 xl:grid-cols-3">
         {sections.map((section) => (
           <Card key={section.title}>
-            <CardHeader>
+            <CardHeader className="pb-3">
               <CardTitle className="text-sm">{section.title}</CardTitle>
               {section.description && <CardDescription>{section.description}</CardDescription>}
             </CardHeader>
-            <CardContent>
-              <dl className="grid gap-3">
+            <CardContent className="pt-0">
+              <dl className="divide-y">
                 {section.items.map((item) => (
-                  <div key={item.label} className="grid gap-1 rounded-lg border bg-muted/30 p-3">
-                    <dt className="text-xs font-medium text-muted-foreground">{item.label}</dt>
-                    <dd className="break-words text-sm text-foreground">{compactValue(item.value)}</dd>
+                  <div key={item.label} className="grid gap-1 py-2 md:grid-cols-[8rem_minmax(0,1fr)] md:items-start md:gap-3">
+                    <dt className="min-w-0 break-all text-xs font-medium text-muted-foreground">{item.label}</dt>
+                    <dd className="min-w-0 break-words text-sm text-foreground">
+                      <DetailValue value={item.value} />
+                    </dd>
                   </div>
                 ))}
               </dl>
@@ -754,35 +919,120 @@ export function ResourceDetail({ config }: { config: ResourceConfig }) {
         ))}
       </div>
 
-      {labels.length > 0 && (
+      {(labels.length > 0 || annotations.length > 0) && (
         <Card>
-          <CardHeader>
+          <CardHeader className="pb-3">
             <CardTitle className="flex items-center gap-2 text-sm">
               <Code2 className="h-4 w-4 text-muted-foreground" />
-              Labels
+              Metadata
             </CardTitle>
           </CardHeader>
-          <CardContent className="flex flex-wrap gap-2">
-            {labels.map(([key, value]) => (
-              <span key={key} className="rounded-md border bg-muted px-2 py-1 text-xs text-foreground">
-                {key}: {value}
-              </span>
-            ))}
+          <CardContent className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <div className="text-xs font-medium text-muted-foreground">Labels</div>
+              <div className="flex flex-wrap gap-2">
+                {labels.map(([key, value]) => (
+                  <span key={key} className="rounded-md border bg-muted px-2 py-1 text-xs text-foreground">
+                    {key}: {value}
+                  </span>
+                ))}
+                {labels.length === 0 && <span className="text-sm text-muted-foreground">No labels</span>}
+              </div>
+            </div>
+            <div className="space-y-2">
+              <div className="text-xs font-medium text-muted-foreground">Annotations</div>
+              <div className="grid gap-2">
+                {annotations.slice(0, 8).map(([key, value]) => (
+                  <div key={key} className="rounded-lg border bg-muted/30 px-3 py-2 text-xs">
+                    <div className="font-medium text-foreground">{key}</div>
+                    <div className="mt-1 break-words text-muted-foreground">{value}</div>
+                  </div>
+                ))}
+                {annotations.length === 0 && <span className="text-sm text-muted-foreground">No annotations</span>}
+              </div>
+            </div>
           </CardContent>
         </Card>
       )}
+    </div>
+  )
+}
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm">Raw Manifest</CardTitle>
-          <CardDescription>Full Kubernetes object for advanced inspection.</CardDescription>
-        </CardHeader>
-        <CardContent className="p-0">
-          <pre className={cn("min-h-[400px] overflow-x-auto rounded-lg bg-muted/30 p-6 font-mono text-sm text-foreground whitespace-pre")}>
-            {yaml}
-          </pre>
-        </CardContent>
-      </Card>
+export function ResourceManifest({ config }: { config: ResourceConfig }) {
+  const { namespace, name } = useParams()
+  const navigate = useNavigate()
+  const [resource, setResource] = useState<KubeResource | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+
+  const load = async () => {
+    setLoading(true)
+    setError("")
+    try {
+      const nsPath = config.namespaced ? `/namespaces/${namespace}` : ""
+      const res = await apiFetch(`${config.resourcePath}${nsPath}/${config.id}/${name}`)
+      if (!res.ok) throw new Error(await res.text())
+      setResource(await res.json())
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load manifest")
+      setResource(null)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    load()
+  }, [config.id, config.namespaced, config.resourcePath, name, namespace])
+
+  if (loading) {
+    return (
+      <div className="flex h-64 items-center justify-center gap-2">
+        <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted border-t-primary" />
+        <span className="text-sm text-muted-foreground">Loading...</span>
+      </div>
+    )
+  }
+
+  const yaml = resource ? YAML.dump(resource, { noRefs: true, lineWidth: 120 }) : ""
+
+  return (
+    <div className="space-y-5 animate-in fade-in duration-500">
+      <div className="flex items-center gap-4">
+        <Button variant="ghost" size="icon" onClick={() => navigate(`${config.path}/${namespace || "_cluster"}/${name}`)}>
+          <ChevronLeft className="h-5 w-5" />
+        </Button>
+        <div className="flex-1">
+          <h1 className="text-2xl font-bold">{name}</h1>
+          <p className="text-sm text-muted-foreground">Manifest</p>
+        </div>
+        <Button size="sm" variant="outline" onClick={load} className="gap-2">
+          <RefreshCw className="h-4 w-4" />
+          Refresh
+        </Button>
+      </div>
+
+      <DetailTabs config={config} namespace={namespace} name={name} active="manifest" />
+
+      {error ? (
+        <Card>
+          <CardContent className="flex items-start gap-3 p-6">
+            <AlertTriangle className="mt-0.5 h-5 w-5 text-destructive" />
+            <div>
+              <div className="font-semibold">Manifest unavailable</div>
+              <p className="mt-1 text-sm text-muted-foreground">{error}</p>
+            </div>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardContent className="p-0">
+            <pre className="min-h-[calc(100dvh-260px)] overflow-x-auto rounded-lg bg-muted/30 p-6 font-mono text-sm text-foreground whitespace-pre">
+              {yaml}
+            </pre>
+          </CardContent>
+        </Card>
+      )}
     </div>
   )
 }

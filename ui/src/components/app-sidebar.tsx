@@ -7,12 +7,10 @@ import {
   HardDrive,
   KeyRound,
   LayoutDashboard,
-  Image,
   Network,
   Route,
   Scale,
   Server,
-  Settings,
   Shield,
   Terminal,
   Undo2,
@@ -48,9 +46,6 @@ const navItems = [
   { name: "SSH Keys", path: "/ssh-keys", icon: KeyRound },
   { name: "Firewalls", path: "/firewalls", icon: Shield },
   { name: "Autoscaling", path: "/autoscaling", icon: Scale },
-  { name: "K8s Clusters", path: "/clusters", icon: Globe },
-  { name: "Images", path: "/images", icon: Image },
-  { name: "Settings", path: "/settings", icon: Settings },
 ]
 
 export function AppSidebar() {
