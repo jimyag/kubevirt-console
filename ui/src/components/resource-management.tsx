@@ -948,6 +948,286 @@ function NodeDetailOverview({ resource }: { resource: KubeResource }) {
   )
 }
 
+const admissionRuleText = (rules: unknown) => asRecordList(rules).map((rule) => {
+  const operations = joinList(rule.operations)
+  const apiGroups = joinList(rule.apiGroups)
+  const resources = joinList(rule.resources)
+  const scope = compactValue(rule.scope)
+  return [operations, apiGroups, resources, scope].filter((item) => item && item !== "N/A").join(" / ")
+}).filter(Boolean)
+
+const admissionClientText = (clientConfig: unknown) => {
+  const client = asRecord(clientConfig)
+  const service = asRecord(client.service)
+  if (service.name) {
+    return `Service ${compactValue(service.namespace || "default")}/${compactValue(service.name)}${service.path ? compactValue(service.path) : ""}`
+  }
+  return compactValue(client.url)
+}
+
+function AdmissionDetailOverview({ resource }: { resource: KubeResource }) {
+  const spec = asRecord(resource.spec)
+  const status = asRecord(resource.status)
+  const webhooks = asRecordList(resource.webhooks)
+  const validations = asRecordList(spec.validations)
+  const variables = asRecordList(spec.variables)
+  const auditAnnotations = asRecordList(spec.auditAnnotations)
+  const matchConstraints = asRecord(spec.matchConstraints || spec.matchResources)
+
+  if (webhooks.length > 0) {
+    return (
+      <div className="space-y-4">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <SummaryCard label="Webhooks" value={webhooks.length} />
+          <SummaryCard label="Failure Policies" value={[...new Set(webhooks.map((item) => compactValue(item.failurePolicy || "Fail")))]} />
+          <SummaryCard label="Side Effects" value={[...new Set(webhooks.map((item) => compactValue(item.sideEffects)))]} />
+          <SummaryCard label="Admission Review" value={[...new Set(webhooks.flatMap((item) => Array.isArray(item.admissionReviewVersions) ? item.admissionReviewVersions.map(compactValue) : []))]} />
+        </div>
+        <SectionCard title="Webhooks" description="Client endpoints, matching rules, selector scope, and admission behavior.">
+          <div className="overflow-x-auto rounded-lg border">
+            <Table className="min-w-[1040px]">
+              <TableHeader className="bg-muted">
+                <TableRow>
+                  <TableHead className="text-xs">Name</TableHead>
+                  <TableHead className="text-xs">Client</TableHead>
+                  <TableHead className="text-xs">Rules</TableHead>
+                  <TableHead className="text-xs">Selectors</TableHead>
+                  <TableHead className="text-xs">Policy</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {webhooks.map((webhook, index) => (
+                  <TableRow key={`${compactValue(webhook.name)}-${index}`} className="hover:bg-muted/50">
+                    <TableCell className="max-w-[220px] break-words font-semibold">{compactValue(webhook.name)}</TableCell>
+                    <TableCell className="max-w-[240px] break-words text-xs text-muted-foreground">{admissionClientText(webhook.clientConfig)}</TableCell>
+                    <TableCell className="max-w-[320px] text-xs text-muted-foreground">
+                      <ChipList values={admissionRuleText(webhook.rules)} />
+                    </TableCell>
+                    <TableCell className="max-w-[240px] text-xs text-muted-foreground">
+                      <DetailValue value={{
+                        namespaceSelector: webhook.namespaceSelector,
+                        objectSelector: webhook.objectSelector,
+                        matchConditions: webhook.matchConditions,
+                      }} />
+                    </TableCell>
+                    <TableCell className="max-w-[220px] text-xs text-muted-foreground">
+                      <CompactKvTable rows={[
+                        { label: "Failure", value: webhook.failurePolicy || "Fail" },
+                        { label: "Match", value: webhook.matchPolicy },
+                        { label: "Side Effects", value: webhook.sideEffects },
+                        { label: "Timeout", value: webhook.timeoutSeconds },
+                        { label: "Reinvocation", value: webhook.reinvocationPolicy },
+                      ]} />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </SectionCard>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <SummaryCard label="Policy" value={spec.policyName || resource.metadata.name} />
+        <SummaryCard label="Failure Policy" value={spec.failurePolicy} />
+        <SummaryCard label="Actions" value={spec.validationActions} />
+        <SummaryCard label="Conditions" value={asRecordList(status.conditions).length || "N/A"} />
+      </div>
+      <div className="grid gap-4 xl:grid-cols-2">
+        <SectionCard title="Policy">
+          <CompactKvTable rows={[
+            { label: "Policy Name", value: spec.policyName },
+            { label: "Failure Policy", value: spec.failurePolicy },
+            { label: "Validation Actions", value: spec.validationActions },
+            { label: "Param Kind", value: spec.paramKind },
+            { label: "Param Ref", value: spec.paramRef },
+          ]} />
+        </SectionCard>
+        <SectionCard title="Match Constraints">
+          <CompactKvTable rows={[
+            { label: "Resource Rules", value: matchConstraints.resourceRules },
+            { label: "Exclude Rules", value: matchConstraints.excludeResourceRules },
+            { label: "Namespace Selector", value: matchConstraints.namespaceSelector },
+            { label: "Object Selector", value: matchConstraints.objectSelector },
+            { label: "Match Conditions", value: matchConstraints.matchConditions },
+          ]} />
+        </SectionCard>
+      </div>
+      <div className="grid gap-4 xl:grid-cols-2">
+        <SectionCard title="Validations">
+          <DetailValue value={validations} />
+        </SectionCard>
+        <SectionCard title="Variables And Audit">
+          <DetailValue value={{ variables, auditAnnotations }} />
+        </SectionCard>
+      </div>
+      <SectionCard title="Status">
+        <DetailValue value={status.conditions || status} />
+      </SectionCard>
+    </div>
+  )
+}
+
+function RbacDetailOverview({ resource }: { resource: KubeResource }) {
+  const rules = asRecordList(resource.rules)
+  const roleRef = asRecord(resource.roleRef)
+  const subjects = asRecordList(resource.subjects)
+  const secrets = asRecordList(resource.secrets)
+  const imagePullSecrets = asRecordList(resource.imagePullSecrets)
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <SummaryCard label="Rules" value={rules.length || "N/A"} />
+        <SummaryCard label="Subjects" value={subjects.length || "N/A"} />
+        <SummaryCard label="Role Ref" value={[roleRef.kind, roleRef.name].filter(Boolean).map(compactValue).join("/")} />
+        <SummaryCard label="Automount Token" value={resource.automountServiceAccountToken} />
+      </div>
+      {rules.length > 0 && (
+        <SectionCard title="Rules">
+          <div className="overflow-x-auto rounded-lg border">
+            <Table className="min-w-[900px]">
+              <TableHeader className="bg-muted">
+                <TableRow>
+                  <TableHead className="text-xs">API Groups</TableHead>
+                  <TableHead className="text-xs">Resources</TableHead>
+                  <TableHead className="text-xs">Resource Names</TableHead>
+                  <TableHead className="text-xs">Verbs</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rules.map((rule, index) => (
+                  <TableRow key={index} className="hover:bg-muted/50">
+                    <TableCell className="max-w-[220px] break-words text-xs">{joinList(rule.apiGroups)}</TableCell>
+                    <TableCell className="max-w-[280px] break-words text-xs">{joinList(rule.resources)}</TableCell>
+                    <TableCell className="max-w-[240px] break-words text-xs">{joinList(rule.resourceNames)}</TableCell>
+                    <TableCell className="max-w-[240px] break-words text-xs">{joinList(rule.verbs)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </SectionCard>
+      )}
+      <div className="grid gap-4 xl:grid-cols-2">
+        <SectionCard title="Subjects">
+          <DetailValue value={subjects} />
+        </SectionCard>
+        <SectionCard title="Service Account">
+          <CompactKvTable rows={[
+            { label: "Secrets", value: secrets },
+            { label: "Image Pull Secrets", value: imagePullSecrets },
+            { label: "Automount Token", value: resource.automountServiceAccountToken },
+          ]} />
+        </SectionCard>
+      </div>
+    </div>
+  )
+}
+
+function ConfigDetailOverview({ resource }: { resource: KubeResource }) {
+  const data = asRecord(resource.data)
+  const binaryData = asRecord(resource.binaryData)
+  const type = compactValue(resource.type || resource.kind)
+  const keys = Object.keys(data)
+  const binaryKeys = Object.keys(binaryData)
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <SummaryCard label="Type" value={type} />
+        <SummaryCard label="Data Keys" value={keys.length} />
+        <SummaryCard label="Binary Keys" value={binaryKeys.length || "N/A"} />
+        <SummaryCard label="Immutable" value={resource.immutable} />
+      </div>
+      <SectionCard title="Data">
+        <div className="grid gap-3 xl:grid-cols-2">
+          {keys.length === 0 && <span className="text-sm text-muted-foreground">No data</span>}
+          {keys.map((key) => (
+            <div key={key} className="min-w-0 rounded-lg border bg-muted/30 p-3">
+              <div className="mb-2 break-all text-xs font-semibold text-foreground">{key}</div>
+              <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs text-foreground">{compactValue(data[key])}</pre>
+            </div>
+          ))}
+        </div>
+      </SectionCard>
+      {binaryKeys.length > 0 && (
+        <SectionCard title="Binary Data">
+          <ChipList values={binaryKeys} />
+        </SectionCard>
+      )}
+    </div>
+  )
+}
+
+function PolicyDetailOverview({ resource }: { resource: KubeResource }) {
+  const spec = asRecord(resource.spec)
+  const status = asRecord(resource.status)
+  const hard = asRecord(spec.hard)
+  const used = asRecord(status.used)
+  const limits = asRecordList(spec.limits)
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <SummaryCard label="Type" value={resource.kind} />
+        <SummaryCard label="Scopes" value={spec.scopes || spec.scopeSelector} />
+        <SummaryCard label="Limits" value={limits.length || "N/A"} />
+        <SummaryCard label="Disruptions" value={`${compactValue(status.currentHealthy)} / ${compactValue(status.desiredHealthy)}`} />
+      </div>
+      <div className="grid gap-4 xl:grid-cols-2">
+        <SectionCard title="Spec">
+          <CompactKvTable rows={[
+            { label: "Min Available", value: spec.minAvailable },
+            { label: "Max Unavailable", value: spec.maxUnavailable },
+            { label: "Selector", value: asRecord(spec.selector).matchLabels || spec.selector },
+            { label: "Hard", value: hard },
+            { label: "Limits", value: limits },
+          ]} />
+        </SectionCard>
+        <SectionCard title="Status">
+          <CompactKvTable rows={[
+            { label: "Used", value: used },
+            { label: "Current Healthy", value: status.currentHealthy },
+            { label: "Desired Healthy", value: status.desiredHealthy },
+            { label: "Expected Pods", value: status.expectedPods },
+            { label: "Disruptions Allowed", value: status.disruptionsAllowed },
+          ]} />
+        </SectionCard>
+      </div>
+    </div>
+  )
+}
+
+function ClusterControlDetailOverview({ resource }: { resource: KubeResource }) {
+  const spec = asRecord(resource.spec)
+  const status = asRecord(resource.status)
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <SummaryCard label="Kind" value={resource.kind} />
+        <SummaryCard label="Version" value={resource.apiVersion || spec.version} />
+        <SummaryCard label="Available" value={status.available ?? status.phase ?? asRecordList(status.conditions).find((item) => item.status === "True")?.type} />
+        <SummaryCard label="Created" value={resource.metadata.creationTimestamp} />
+      </div>
+      <div className="grid gap-4 xl:grid-cols-2">
+        <SectionCard title="Spec">
+          <CompactKvTable rows={Object.entries(spec).map(([label, value]) => ({ label, value }))} />
+        </SectionCard>
+        <SectionCard title="Status">
+          <CompactKvTable rows={Object.entries(status).map(([label, value]) => ({ label, value }))} />
+        </SectionCard>
+      </div>
+      <SectionCard title="Conditions">
+        <DetailValue value={status.conditions} />
+      </SectionCard>
+    </div>
+  )
+}
+
 function StructuredResourceOverview({ resource, sections }: { resource: KubeResource; sections: DetailSection[] }) {
   const spec = asRecord(resource.spec)
   const status = asRecord(resource.status)
@@ -976,12 +1256,17 @@ function StructuredResourceOverview({ resource, sections }: { resource: KubeReso
 
 function ResourceSpecificOverview({ resource, config, sections }: { resource: KubeResource; config: ResourceConfig; sections: DetailSection[] }) {
   const kind = resource.kind || config.kind
-  const id = config.id
+  const scope = `${config.id} ${config.path}`.toLowerCase()
   if (kind === "Pod") return <PodDetailOverview resource={resource} />
-  if (["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job", "CronJob", "HorizontalPodAutoscaler", "VirtualMachinePool", "VirtualMachineInstanceReplicaSet"].includes(kind)) return <WorkloadDetailOverview resource={resource} />
+  if (["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job", "CronJob", "HorizontalPodAutoscaler", "ReplicationController", "PodTemplate", "ControllerRevision", "VirtualMachinePool", "VirtualMachineInstanceReplicaSet"].includes(kind)) return <WorkloadDetailOverview resource={resource} />
   if (kind === "Node") return <NodeDetailOverview resource={resource} />
-  if (["Service", "Ingress", "IngressClass", "NetworkPolicy", "EndpointSlice", "Endpoints", "NetworkAttachmentDefinition", "Gateway", "GatewayClass", "HTTPRoute"].includes(kind) || id.toLowerCase().includes("network") || id.toLowerCase().includes("route") || id.toLowerCase().includes("gateway") || id.toLowerCase().includes("cilium") || id.toLowerCase().includes("calico") || id.toLowerCase().includes("kubeovn")) return <NetworkDetailOverview resource={resource} />
-  if (["PersistentVolume", "PersistentVolumeClaim", "StorageClass", "CSIDriver", "CSINode", "CSIStorageCapacity", "VolumeAttachment", "VolumeSnapshot", "VolumeSnapshotClass", "VolumeSnapshotContent", "DataVolume", "DataSource", "StorageProfile"].includes(kind) || id.toLowerCase().includes("volume") || id.toLowerCase().includes("storage") || id.toLowerCase().includes("snapshot")) return <StorageDetailOverview resource={resource} />
+  if (["MutatingWebhookConfiguration", "ValidatingWebhookConfiguration", "ValidatingAdmissionPolicy", "ValidatingAdmissionPolicyBinding"].includes(kind)) return <AdmissionDetailOverview resource={resource} />
+  if (["Role", "ClusterRole", "RoleBinding", "ClusterRoleBinding", "ServiceAccount"].includes(kind)) return <RbacDetailOverview resource={resource} />
+  if (["ConfigMap", "Secret"].includes(kind)) return <ConfigDetailOverview resource={resource} />
+  if (["LimitRange", "ResourceQuota", "PodDisruptionBudget"].includes(kind)) return <PolicyDetailOverview resource={resource} />
+  if (["APIService", "CustomResourceDefinition", "ComponentStatus", "Namespace", "Lease", "CertificateSigningRequest", "FlowSchema", "PriorityLevelConfiguration", "RuntimeClass", "PriorityClass", "Event"].includes(kind)) return <ClusterControlDetailOverview resource={resource} />
+  if (["Service", "Ingress", "IngressClass", "NetworkPolicy", "EndpointSlice", "Endpoints", "NetworkAttachmentDefinition", "Gateway", "GatewayClass", "HTTPRoute"].includes(kind) || ["network", "route", "gateway", "cilium", "calico", "kubeovn", "metallb"].some((item) => scope.includes(item))) return <NetworkDetailOverview resource={resource} />
+  if (["PersistentVolume", "PersistentVolumeClaim", "StorageClass", "CSIDriver", "CSINode", "CSIStorageCapacity", "VolumeAttachment", "VolumeSnapshot", "VolumeSnapshotClass", "VolumeSnapshotContent", "DataVolume", "DataSource", "StorageProfile"].includes(kind) || ["volume", "storage", "snapshot"].some((item) => scope.includes(item))) return <StorageDetailOverview resource={resource} />
   if (kind.includes("VirtualMachine") || kind === "KubeVirt" || kind.startsWith("CDI") || ["ObjectTransfer", "DataImportCron", "VolumeImportSource", "VolumeUploadSource", "VolumeCloneSource"].includes(kind)) return <VirtualizationDetailOverview resource={resource} />
   return <StructuredResourceOverview resource={resource} sections={sections} />
 }
@@ -995,12 +1280,476 @@ const resourceFieldDefaults = (resource: KubeResource, fields?: CreateFormField[
     typeof field.defaultValue === "function" ? field.defaultValue(resource) : field.defaultValue ?? "",
   ])) as Record<string, string | boolean>
 
-const templateResource = (config: ResourceConfig, values: Record<string, string | boolean>) => {
-  const parsed = YAML.load(config.createTemplate) as KubeResource
-  parsed.metadata = parsed.metadata || { name: "" }
-  if (values.name) parsed.metadata.name = String(values.name)
-  if (config.namespaced && values.namespace) parsed.metadata.namespace = String(values.namespace)
-  return parsed
+const textFromRecord = (value: unknown) =>
+  Object.entries(asRecord(value)).map(([key, next]) => `${key}=${compactValue(next)}`).join("\n")
+
+const recordFromText = (value: string | boolean | undefined) =>
+  Object.fromEntries(String(value ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [key, ...rest] = line.split("=")
+      return [key.trim(), rest.join("=").trim()]
+    })
+    .filter(([key]) => key))
+
+const csvFromList = (value: unknown) => Array.isArray(value) ? value.map(compactValue).join(", ") : compactValue(value) === "N/A" ? "" : compactValue(value)
+
+const listFromCsv = (value: string | boolean | undefined) =>
+  String(value ?? "").split(",").map((item) => item.trim()).filter(Boolean)
+
+const numberFromValue = (value: string | boolean | undefined, fallback: number) => {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
+const createNamespaceNameFields = (name: string): CreateFormField[] => [
+  { name: "name", label: "Name", section: "Identity", defaultValue: name, required: true },
+  { name: "namespace", label: "Namespace", section: "Identity", defaultValue: "default", required: true },
+]
+
+const createNameOnlyFields = (name: string): CreateFormField[] => [
+  { name: "name", label: "Name", section: "Identity", defaultValue: name, required: true },
+]
+
+const identityCreateFields = (config: ResourceConfig) =>
+  config.namespaced ? createNamespaceNameFields(`example-${config.id}`) : createNameOnlyFields(`example-${config.id}`)
+
+const resourceActionBase = (config: ResourceConfig, resource: KubeResource) => {
+  const apiVersion = resource.apiVersion || apiVersionFromListPath(config.listPath)
+  if (apiVersion === "v1") return "/api/v1"
+  return `/apis/${apiVersion}`
+}
+
+const resourceActionUrl = (config: ResourceConfig, resource: KubeResource) =>
+  `${resourceActionBase(config, resource)}${config.namespaced ? `/namespaces/${resource.metadata.namespace}` : ""}/${config.id}/${resource.metadata.name}`
+
+const canCreateResource = (config: ResourceConfig) => config.kind !== "ComponentStatus"
+const canDeleteResource = (config: ResourceConfig) => config.kind !== "ComponentStatus"
+
+const mergePatchOptions = (body: unknown): RequestInit => ({
+  method: "PATCH",
+  headers: { "Content-Type": "application/merge-patch+json", Accept: "application/json" },
+  body: JSON.stringify(body),
+})
+
+const jsonPatchOptions = (body: unknown[]): RequestInit => ({
+  method: "PATCH",
+  headers: { "Content-Type": "application/json-patch+json", Accept: "application/json" },
+  body: JSON.stringify(body),
+})
+
+const specBasicsPatch = (values: Record<string, string | boolean>) => {
+  const spec = recordFromText(values.specFields)
+  return Object.keys(spec).length ? { spec } : {}
+}
+
+const customCreateFields = (config: ResourceConfig) => {
+  const identity = new Set(config.namespaced ? ["name", "namespace"] : ["name"])
+  return (config.createFields || []).filter((field) => !identity.has(field.name))
+}
+
+const usesInferredCreate = (config: ResourceConfig) =>
+  customCreateFields(config).length === 0 && (
+    ["FlowSchema", "PriorityLevelConfiguration", "APIService", "CustomResourceDefinition", "CertificateSigningRequest", "Node", "Endpoints", "EndpointSlice", "Event", "ReplicaSet", "ControllerRevision"].includes(config.kind) ||
+    config.path.includes("/calico/") ||
+    config.path.includes("/cilium/") ||
+    config.path.includes("/kube-ovn/")
+  )
+
+const effectiveCreateFields = (config: ResourceConfig): CreateFormField[] => {
+  const custom = customCreateFields(config)
+  if (custom.length > 0) return config.createFields || identityCreateFields(config)
+  const identity = identityCreateFields(config)
+
+  switch (config.kind) {
+    case "FlowSchema":
+      return [
+        ...identity,
+        { name: "priorityLevel", label: "Priority Level", section: "Matching", defaultValue: "workload-low" },
+        { name: "matchingPrecedence", label: "Matching Precedence", section: "Matching", type: "number", defaultValue: "1000" },
+        { name: "distinguisherMethod", label: "Distinguisher Method", section: "Matching", type: "select", defaultValue: "ByUser", options: [{ label: "By User", value: "ByUser" }, { label: "By Namespace", value: "ByNamespace" }] },
+        { name: "subjects", label: "Subjects", section: "Rules", type: "textarea", defaultValue: "Group|system:authenticated", placeholder: "Kind|Name per line" },
+        { name: "verbs", label: "Verbs", section: "Rules", defaultValue: "*", placeholder: "comma-separated" },
+        { name: "apiGroups", label: "API Groups", section: "Rules", defaultValue: "*", placeholder: "comma-separated" },
+        { name: "resources", label: "Resources", section: "Rules", defaultValue: "*", placeholder: "comma-separated" },
+      ]
+    case "PriorityLevelConfiguration":
+      return [
+        ...identity,
+        { name: "type", label: "Type", section: "Priority", type: "select", defaultValue: "Limited", options: [{ label: "Limited", value: "Limited" }, { label: "Exempt", value: "Exempt" }] },
+        { name: "assuredConcurrencyShares", label: "Assured Concurrency Shares", section: "Limited", type: "number", defaultValue: "30" },
+        { name: "queues", label: "Queues", section: "Limited", type: "number", defaultValue: "64" },
+        { name: "handSize", label: "Hand Size", section: "Limited", type: "number", defaultValue: "8" },
+        { name: "queueLengthLimit", label: "Queue Length Limit", section: "Limited", type: "number", defaultValue: "50" },
+      ]
+    case "APIService":
+      return [
+        ...identity,
+        { name: "group", label: "API Group", section: "API", defaultValue: "example.com" },
+        { name: "version", label: "API Version", section: "API", defaultValue: "v1" },
+        { name: "serviceNamespace", label: "Service Namespace", section: "Service", defaultValue: "default" },
+        { name: "serviceName", label: "Service Name", section: "Service", defaultValue: "example-apiserver" },
+        { name: "insecureSkipTLSVerify", label: "Skip TLS Verify", section: "TLS", type: "checkbox", defaultValue: true },
+        { name: "groupPriorityMinimum", label: "Group Priority", section: "Priority", type: "number", defaultValue: "1000" },
+        { name: "versionPriority", label: "Version Priority", section: "Priority", type: "number", defaultValue: "15" },
+      ]
+    case "CustomResourceDefinition":
+      return [
+        ...identity,
+        { name: "group", label: "Group", section: "Names", defaultValue: "example.com" },
+        { name: "plural", label: "Plural", section: "Names", defaultValue: "examples" },
+        { name: "singular", label: "Singular", section: "Names", defaultValue: "example" },
+        { name: "kind", label: "Kind", section: "Names", defaultValue: "Example" },
+        { name: "scope", label: "Scope", section: "Schema", type: "select", defaultValue: "Namespaced", options: [{ label: "Namespaced", value: "Namespaced" }, { label: "Cluster", value: "Cluster" }] },
+        { name: "version", label: "Version", section: "Schema", defaultValue: "v1" },
+      ]
+    case "CertificateSigningRequest":
+      return [...identity, { name: "request", label: "CSR Request PEM/Base64", section: "Request", type: "textarea", defaultValue: "", placeholder: "Paste CSR request bytes or base64" }, { name: "signerName", label: "Signer Name", section: "Request", defaultValue: "kubernetes.io/kube-apiserver-client" }, { name: "usages", label: "Usages", section: "Request", defaultValue: "client auth", placeholder: "comma-separated" }]
+    case "Node":
+      return [...identity, { name: "labels", label: "Labels", section: "Metadata", type: "textarea", defaultValue: "kubernetes.io/os=linux", placeholder: "key=value per line" }, { name: "podCIDR", label: "Pod CIDR", section: "Spec", defaultValue: "", placeholder: "optional" }, { name: "providerID", label: "Provider ID", section: "Spec", defaultValue: "", placeholder: "optional" }]
+    case "Endpoints":
+      return [...identity, { name: "addresses", label: "Addresses", section: "Endpoint", defaultValue: "10.0.0.1", placeholder: "comma-separated IPs" }, { name: "port", label: "Port", section: "Endpoint", type: "number", defaultValue: "80" }, { name: "protocol", label: "Protocol", section: "Endpoint", type: "select", defaultValue: "TCP", options: [{ label: "TCP", value: "TCP" }, { label: "UDP", value: "UDP" }, { label: "SCTP", value: "SCTP" }] }]
+    case "EndpointSlice":
+      return [...identity, { name: "serviceName", label: "Service Name", section: "Discovery", defaultValue: "example-service" }, { name: "addressType", label: "Address Type", section: "Discovery", type: "select", defaultValue: "IPv4", options: [{ label: "IPv4", value: "IPv4" }, { label: "IPv6", value: "IPv6" }, { label: "FQDN", value: "FQDN" }] }, { name: "addresses", label: "Addresses", section: "Discovery", defaultValue: "10.0.0.1", placeholder: "comma-separated" }, { name: "port", label: "Port", section: "Ports", type: "number", defaultValue: "80" }]
+    case "Event":
+      return [...identity, { name: "involvedKind", label: "Involved Kind", section: "Event", defaultValue: "Pod" }, { name: "involvedName", label: "Involved Name", section: "Event", defaultValue: "example-pod" }, { name: "reason", label: "Reason", section: "Event", defaultValue: "ManualEvent" }, { name: "message", label: "Message", section: "Event", defaultValue: "Created from dashboard" }, { name: "type", label: "Type", section: "Event", type: "select", defaultValue: "Normal", options: [{ label: "Normal", value: "Normal" }, { label: "Warning", value: "Warning" }] }]
+    case "ReplicaSet":
+    case "ControllerRevision":
+      return [...identity, { name: "labels", label: "Labels", section: "Metadata", type: "textarea", defaultValue: "app=example", placeholder: "key=value per line" }, { name: "replicas", label: "Replicas", section: "Spec", type: "number", defaultValue: "1" }, { name: "image", label: "Container Image", section: "Template", defaultValue: "nginx:latest" }]
+    default:
+      if (config.path.includes("/calico/") || config.path.includes("/cilium/") || config.path.includes("/kube-ovn/")) {
+        return [...identity, { name: "labels", label: "Labels", section: "Metadata", type: "textarea", defaultValue: "", placeholder: "key=value per line" }, { name: "selector", label: "Selector", section: "Spec", defaultValue: "all()", placeholder: "selector expression or label selector" }, { name: "cidrs", label: "CIDRs / Nets", section: "Spec", defaultValue: "", placeholder: "comma-separated" }, { name: "specFields", label: `${config.kind} Spec Fields`, section: "Spec", type: "textarea", defaultValue: "", placeholder: "topLevelSpecKey=value per line" }]
+      }
+      return config.createFields || identity
+  }
+}
+
+
+const flowSchemaSubject = (line: string, namespace: string) => {
+  const [kind, name] = line.split("|")
+  if (kind === "ServiceAccount") return { kind, serviceAccount: { name, namespace } }
+  if (kind === "User") return { kind, user: { name } }
+  return { kind: "Group", group: { name: name || "system:authenticated" } }
+}
+
+const buildEffectiveCreateResource = (config: ResourceConfig, values: Record<string, string | boolean>): KubeResource | KubeResource[] => {
+  if (config.buildCreateResource && !usesInferredCreate(config)) return config.buildCreateResource(values)
+  const name = String(values.name || `example-${config.id}`)
+  const namespace = String(values.namespace || "default")
+  const labels = recordFromText(values.labels)
+  const metadata = { name, ...(config.namespaced ? { namespace } : {}), ...(Object.keys(labels).length ? { labels } : {}) }
+  const base = { apiVersion: apiVersionFromListPath(config.listPath), kind: config.kind, metadata } as KubeResource
+
+  switch (config.kind) {
+    case "FlowSchema":
+      return { ...base, spec: { matchingPrecedence: numberFromValue(values.matchingPrecedence, 1000), priorityLevelConfiguration: { name: values.priorityLevel }, distinguisherMethod: { type: values.distinguisherMethod }, rules: [{ subjects: String(values.subjects || "").split("\n").map((line) => line.trim()).filter(Boolean).map((line) => flowSchemaSubject(line, namespace)), resourceRules: [{ verbs: listFromCsv(values.verbs), apiGroups: listFromCsv(values.apiGroups), resources: listFromCsv(values.resources) }] }] } }
+    case "PriorityLevelConfiguration":
+      return { ...base, spec: { type: values.type, ...(values.type === "Limited" ? { limited: { assuredConcurrencyShares: numberFromValue(values.assuredConcurrencyShares, 30), limitResponse: { type: "Queue", queuing: { queues: numberFromValue(values.queues, 64), handSize: numberFromValue(values.handSize, 8), queueLengthLimit: numberFromValue(values.queueLengthLimit, 50) } } } } : {}) } }
+    case "APIService":
+      return { ...base, spec: { group: values.group, version: values.version, service: { namespace: values.serviceNamespace, name: values.serviceName }, insecureSkipTLSVerify: values.insecureSkipTLSVerify === true, groupPriorityMinimum: numberFromValue(values.groupPriorityMinimum, 1000), versionPriority: numberFromValue(values.versionPriority, 15) } }
+    case "CustomResourceDefinition":
+      return { ...base, metadata: { name: `${values.plural}.${values.group}` }, spec: { group: values.group, scope: values.scope, names: { plural: values.plural, singular: values.singular, kind: values.kind }, versions: [{ name: values.version, served: true, storage: true, schema: { openAPIV3Schema: { type: "object", "x-kubernetes-preserve-unknown-fields": true } } }] } }
+    case "CertificateSigningRequest":
+      return { ...base, spec: { request: values.request, signerName: values.signerName, usages: listFromCsv(values.usages) } }
+    case "Node":
+      return { ...base, spec: { ...(values.podCIDR ? { podCIDR: values.podCIDR } : {}), ...(values.providerID ? { providerID: values.providerID } : {}) } }
+    case "Endpoints":
+      return { ...base, subsets: [{ addresses: listFromCsv(values.addresses).map((ip) => ({ ip })), ports: [{ port: numberFromValue(values.port, 80), protocol: values.protocol }] }] }
+    case "EndpointSlice":
+      return { ...base, metadata: { ...metadata, labels: { "kubernetes.io/service-name": String(values.serviceName || "example-service") } }, addressType: values.addressType, endpoints: [{ addresses: listFromCsv(values.addresses) }], ports: [{ port: numberFromValue(values.port, 80), protocol: "TCP" }] }
+    case "Event":
+      return { ...base, involvedObject: { kind: values.involvedKind, name: values.involvedName, namespace }, reason: values.reason, message: values.message, type: values.type, firstTimestamp: new Date().toISOString(), lastTimestamp: new Date().toISOString(), count: 1, source: { component: "kubevirt-dashboard" } }
+    case "ReplicaSet":
+      return { ...base, spec: { replicas: numberFromValue(values.replicas, 1), selector: { matchLabels: labels }, template: { metadata: { labels }, spec: { containers: [{ name: "app", image: values.image }] } } } }
+    case "ControllerRevision":
+      return { ...base, data: { labels }, revision: 1 }
+    default:
+      return { ...base, spec: { selector: values.selector, cidrs: listFromCsv(values.cidrs), ...asRecord(specBasicsPatch(values).spec) } }
+  }
+}
+
+const resourceAction = (
+  config: ResourceConfig,
+  resource: KubeResource,
+  action: Omit<ResourceAction, "buildRequest"> & { patch: (values: Record<string, string | boolean>) => unknown; contentType?: "merge" | "json" }
+): ResourceAction => ({
+  ...action,
+  buildRequest: (_, values) => ({
+    url: resourceActionUrl(config, resource),
+    options: action.contentType === "json" ? jsonPatchOptions(action.patch(values) as unknown[]) : mergePatchOptions(action.patch(values)),
+  }),
+})
+
+const inferredResourceActions = (config: ResourceConfig, resource: KubeResource): ResourceAction[] => {
+  if (resource.kind === "ComponentStatus") return []
+
+  const kind = resource.kind || config.kind
+  const spec = asRecord(resource.spec)
+  const metadataFields: CreateFormField[] = [
+    { name: "labels", label: "Labels", section: "Metadata", type: "textarea", defaultValue: (r) => textFromRecord(r.metadata.labels), placeholder: "key=value per line" },
+    { name: "annotations", label: "Annotations", section: "Metadata", type: "textarea", defaultValue: (r) => textFromRecord(r.metadata.annotations), placeholder: "key=value per line" },
+  ]
+  const actions: ResourceAction[] = [
+    resourceAction(config, resource, {
+      id: "edit-metadata",
+      label: "Edit Metadata",
+      description: `Update ${kind} labels and annotations.`,
+      fields: metadataFields,
+      patch: (values) => ({ metadata: { labels: recordFromText(values.labels), annotations: recordFromText(values.annotations) } }),
+    }),
+  ]
+
+  const add = (action: Omit<ResourceAction, "buildRequest"> & { patch: (values: Record<string, string | boolean>) => unknown; contentType?: "merge" | "json" }) =>
+    actions.push(resourceAction(config, resource, action))
+
+  if (["Deployment", "StatefulSet", "ReplicaSet", "ReplicationController"].includes(kind)) {
+    add({
+      id: "edit-workload-scale",
+      label: "Edit Scale",
+      description: `Set ${kind} replica count.`,
+      fields: [{ name: "replicas", label: "Replicas", section: "Scale", type: "number", defaultValue: () => String(spec.replicas ?? 1) }],
+      patch: (values) => ({ spec: { replicas: numberFromValue(values.replicas, 1) } }),
+    })
+  }
+
+  if (["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "ReplicationController", "Job", "CronJob"].includes(kind)) {
+    const template = kind === "CronJob" ? asRecord(getValue(resource, ["spec", "jobTemplate", "spec", "template"])) : asRecord(spec.template)
+    add({
+      id: "edit-pod-template-metadata",
+      label: "Edit Template",
+      description: `Update ${kind} pod template labels and annotations.`,
+      fields: [
+        { name: "labels", label: "Template Labels", section: "Pod Template", type: "textarea", defaultValue: () => textFromRecord(asRecord(template.metadata).labels), placeholder: "key=value per line" },
+        { name: "annotations", label: "Template Annotations", section: "Pod Template", type: "textarea", defaultValue: () => textFromRecord(asRecord(template.metadata).annotations), placeholder: "key=value per line" },
+      ],
+      patch: (values) => kind === "CronJob"
+        ? { spec: { jobTemplate: { spec: { template: { metadata: { labels: recordFromText(values.labels), annotations: recordFromText(values.annotations) } } } } } }
+        : { spec: { template: { metadata: { labels: recordFromText(values.labels), annotations: recordFromText(values.annotations) } } } },
+    })
+  }
+
+  if (kind === "CronJob") {
+    add({
+      id: "edit-cron-schedule",
+      label: "Edit Schedule",
+      description: "Update schedule, suspend state, and job history limits.",
+      fields: [
+        { name: "schedule", label: "Schedule", section: "Schedule", defaultValue: () => compactValue(spec.schedule || "* * * * *") },
+        { name: "suspend", label: "Suspend", section: "Schedule", type: "checkbox", defaultValue: () => Boolean(spec.suspend) },
+        { name: "successfulJobsHistoryLimit", label: "Successful History", section: "History", type: "number", defaultValue: () => String(spec.successfulJobsHistoryLimit ?? 3) },
+        { name: "failedJobsHistoryLimit", label: "Failed History", section: "History", type: "number", defaultValue: () => String(spec.failedJobsHistoryLimit ?? 1) },
+      ],
+      patch: (values) => ({ spec: { schedule: values.schedule, suspend: values.suspend === true, successfulJobsHistoryLimit: numberFromValue(values.successfulJobsHistoryLimit, 3), failedJobsHistoryLimit: numberFromValue(values.failedJobsHistoryLimit, 1) } }),
+    })
+  }
+
+  if (kind === "HorizontalPodAutoscaler") {
+    add({
+      id: "edit-hpa-bounds",
+      label: "Edit Bounds",
+      description: "Update HPA minimum and maximum replicas.",
+      fields: [
+        { name: "minReplicas", label: "Min Replicas", section: "Scale", type: "number", defaultValue: () => String(spec.minReplicas ?? 1) },
+        { name: "maxReplicas", label: "Max Replicas", section: "Scale", type: "number", defaultValue: () => String(spec.maxReplicas ?? 3) },
+      ],
+      patch: (values) => ({ spec: { minReplicas: numberFromValue(values.minReplicas, 1), maxReplicas: numberFromValue(values.maxReplicas, 3) } }),
+    })
+  }
+
+  if (["VirtualMachine", "VirtualMachineInstance", "VirtualMachinePool", "VirtualMachineInstanceReplicaSet"].includes(kind)) {
+    const templateSpec = kind === "VirtualMachinePool" ? asRecord(getValue(resource, ["spec", "virtualMachineTemplate", "spec", "template", "spec"])) : asRecord(getValue(resource, ["spec", "template", "spec"]))
+    const domain = asRecord(templateSpec.domain || getValue(resource, ["spec", "domain"]))
+    const cpu = asRecord(domain.cpu)
+    add({
+      id: "edit-virtualization-runtime",
+      label: "Edit Runtime",
+      description: `Update ${kind} run strategy, CPU, memory, and priority class.`,
+      fields: [
+        { name: "runStrategy", label: "Run Strategy", section: "Lifecycle", type: "select", defaultValue: () => compactValue(spec.runStrategy || "Halted"), options: [{ label: "Halted", value: "Halted" }, { label: "Always", value: "Always" }, { label: "Manual", value: "Manual" }] },
+        { name: "sockets", label: "CPU Sockets", section: "Compute", type: "number", defaultValue: () => String(cpu.sockets ?? 1) },
+        { name: "cores", label: "CPU Cores", section: "Compute", type: "number", defaultValue: () => String(cpu.cores ?? cpu.guest ?? 1) },
+        { name: "threads", label: "CPU Threads", section: "Compute", type: "number", defaultValue: () => String(cpu.threads ?? 1) },
+        { name: "memory", label: "Memory", section: "Compute", defaultValue: () => compactValue(asRecord(asRecord(domain.resources).requests).memory || asRecord(domain.memory).guest || "1Gi") },
+        { name: "priorityClassName", label: "Priority Class", section: "Scheduling", defaultValue: () => compactValue(templateSpec.priorityClassName) },
+      ],
+      patch: (values) => {
+        const templatePatch = {
+          spec: {
+            priorityClassName: values.priorityClassName || null,
+            domain: {
+              cpu: { sockets: numberFromValue(values.sockets, 1), cores: numberFromValue(values.cores, 1), threads: numberFromValue(values.threads, 1) },
+              resources: { requests: { memory: values.memory } },
+            },
+          },
+        }
+        if (kind === "VirtualMachinePool") return { spec: { virtualMachineTemplate: { spec: { runStrategy: values.runStrategy, template: templatePatch } } } }
+        if (kind === "VirtualMachine") return { spec: { runStrategy: values.runStrategy, template: templatePatch } }
+        return { spec: templatePatch.spec }
+      },
+    })
+  }
+
+  if (kind === "Service") {
+    add({
+      id: "edit-service-routing",
+      label: "Edit Service",
+      description: "Update service type, selector, external IPs, and load balancer IP.",
+      fields: [
+        { name: "type", label: "Type", section: "Routing", type: "select", defaultValue: () => compactValue(spec.type || "ClusterIP"), options: [{ label: "ClusterIP", value: "ClusterIP" }, { label: "NodePort", value: "NodePort" }, { label: "LoadBalancer", value: "LoadBalancer" }, { label: "ExternalName", value: "ExternalName" }] },
+        { name: "selector", label: "Selector", section: "Routing", type: "textarea", defaultValue: () => textFromRecord(spec.selector), placeholder: "key=value per line" },
+        { name: "externalIPs", label: "External IPs", section: "Routing", defaultValue: () => csvFromList(spec.externalIPs), placeholder: "comma-separated" },
+        { name: "loadBalancerIP", label: "Load Balancer IP", section: "Routing", defaultValue: () => compactValue(spec.loadBalancerIP) },
+      ],
+      patch: (values) => ({ spec: { type: values.type, selector: recordFromText(values.selector), externalIPs: listFromCsv(values.externalIPs), loadBalancerIP: values.loadBalancerIP || null } }),
+    })
+  }
+
+  if (["NetworkPolicy", "CiliumNetworkPolicy", "CiliumClusterwideNetworkPolicy"].includes(kind) || config.path.includes("/calico/") || config.path.includes("/cilium/")) {
+    add({
+      id: "edit-network-policy",
+      label: "Edit Policy",
+      description: `Update ${kind} selectors and policy type fields.`,
+      fields: [
+        { name: "selector", label: "Selector / Endpoint Selector", section: "Policy", type: "textarea", defaultValue: () => textFromRecord(asRecord(spec.podSelector).matchLabels || asRecord(spec.endpointSelector).matchLabels), placeholder: "key=value per line" },
+        { name: "policyTypes", label: "Policy Types", section: "Policy", defaultValue: () => csvFromList(spec.policyTypes || spec.types), placeholder: "Ingress,Egress" },
+        { name: "specFields", label: `${kind} Spec Fields`, section: "Advanced Fields", type: "textarea", defaultValue: () => "", placeholder: "topLevelSpecKey=value per line" },
+      ],
+      patch: (values) => ({
+        spec: {
+          ...(kind.startsWith("Cilium") ? { endpointSelector: { matchLabels: recordFromText(values.selector) } } : { podSelector: { matchLabels: recordFromText(values.selector) } }),
+          ...(kind.startsWith("Cilium") ? {} : { policyTypes: listFromCsv(values.policyTypes) }),
+          ...asRecord(specBasicsPatch(values).spec),
+        },
+      }),
+    })
+  } else if (["Ingress", "IngressClass", "Gateway", "GatewayClass", "HTTPRoute", "NetworkAttachmentDefinition", "Endpoints", "EndpointSlice"].includes(kind) || config.path.includes("/networks/") || config.path.includes("/kube-ovn/")) {
+    add({
+      id: "edit-network-fields",
+      label: `Edit ${kind}`,
+      description: `Update common ${kind} network fields without editing YAML.`,
+      fields: [
+        { name: "className", label: "Class Name", section: "Routing", defaultValue: () => compactValue(spec.ingressClassName || spec.gatewayClassName || spec.controllerName) },
+        { name: "hostnames", label: "Hostnames", section: "Routing", defaultValue: () => csvFromList(spec.hostnames), placeholder: "comma-separated" },
+        { name: "specFields", label: `${kind} Spec Fields`, section: "Advanced Fields", type: "textarea", defaultValue: () => "", placeholder: "topLevelSpecKey=value per line" },
+      ],
+      patch: (values) => ({ spec: { ingressClassName: values.className || undefined, gatewayClassName: values.className || undefined, hostnames: listFromCsv(values.hostnames), ...asRecord(specBasicsPatch(values).spec) } }),
+    })
+  }
+
+  if (["ConfigMap", "Secret"].includes(kind)) {
+    add({
+      id: "edit-config-data",
+      label: "Edit Data",
+      description: `Update ${kind} data keys.`,
+      fields: [{ name: "data", label: "Data", section: "Data", type: "textarea", defaultValue: () => textFromRecord(resource.data), placeholder: "key=value per line" }],
+      patch: (values) => ({ data: recordFromText(values.data) }),
+    })
+  }
+
+  if (["PersistentVolumeClaim", "PersistentVolume", "StorageClass", "VolumeSnapshot", "VolumeSnapshotClass", "VolumeSnapshotContent", "DataVolume", "DataSource", "StorageProfile"].includes(kind) || config.path.includes("/storage/") || config.path.includes("/cdi/")) {
+    add({
+      id: "edit-storage",
+      label: `Edit ${kind}`,
+      description: `Update common ${kind} storage fields.`,
+      fields: [
+        { name: "storageClassName", label: "Storage Class", section: "Storage", defaultValue: () => compactValue(spec.storageClassName || resource.storageClassName) },
+        { name: "storage", label: "Requested Storage", section: "Storage", defaultValue: () => compactValue(asRecord(asRecord(spec.resources).requests).storage || asRecord(asRecord(resource.status).capacity).storage) },
+        { name: "reclaimPolicy", label: "Reclaim Policy", section: "Lifecycle", type: "select", defaultValue: () => compactValue(resource.reclaimPolicy || spec.persistentVolumeReclaimPolicy || "Retain"), options: [{ label: "Retain", value: "Retain" }, { label: "Delete", value: "Delete" }, { label: "Recycle", value: "Recycle" }] },
+        { name: "parameters", label: "Parameters", section: "Parameters", type: "textarea", defaultValue: () => textFromRecord(resource.parameters), placeholder: "key=value per line" },
+      ],
+      patch: (values) => kind === "StorageClass"
+        ? { reclaimPolicy: values.reclaimPolicy, parameters: recordFromText(values.parameters) }
+        : { spec: { storageClassName: values.storageClassName || undefined, persistentVolumeReclaimPolicy: values.reclaimPolicy || undefined, resources: { requests: { storage: values.storage } } } },
+    })
+  }
+
+  if (["Role", "ClusterRole"].includes(kind)) {
+    add({
+      id: "edit-rbac-rules",
+      label: "Edit Rules",
+      description: "Replace RBAC rules using line-oriented fields.",
+      fields: [{ name: "rules", label: "Rules", section: "RBAC", type: "textarea", defaultValue: () => asRecordList(resource.rules).map((rule) => `${csvFromList(rule.apiGroups)}|${csvFromList(rule.resources)}|${csvFromList(rule.verbs)}`).join("\n"), placeholder: "apiGroups|resources|verbs per line" }],
+      patch: (values) => ({
+        rules: String(values.rules || "").split("\n").map((line) => line.trim()).filter(Boolean).map((line) => {
+          const [apiGroups, resources, verbs] = line.split("|")
+          return { apiGroups: listFromCsv(apiGroups), resources: listFromCsv(resources), verbs: listFromCsv(verbs) }
+        }),
+      }),
+    })
+  }
+
+  if (["RoleBinding", "ClusterRoleBinding"].includes(kind)) {
+    const roleRef = asRecord(resource.roleRef)
+    add({
+      id: "edit-rbac-binding",
+      label: "Edit Binding",
+      description: "Update role reference and subjects.",
+      fields: [
+        { name: "roleKind", label: "Role Kind", section: "Role Ref", type: "select", defaultValue: () => compactValue(roleRef.kind || "Role"), options: [{ label: "Role", value: "Role" }, { label: "ClusterRole", value: "ClusterRole" }] },
+        { name: "roleName", label: "Role Name", section: "Role Ref", defaultValue: () => compactValue(roleRef.name) },
+        { name: "subjects", label: "Subjects", section: "Subjects", type: "textarea", defaultValue: () => asRecordList(resource.subjects).map((subject) => `${compactValue(subject.kind)}|${compactValue(subject.name)}|${compactValue(subject.namespace)}`).join("\n"), placeholder: "Kind|Name|Namespace per line" },
+      ],
+      patch: (values) => ({
+        roleRef: { apiGroup: "rbac.authorization.k8s.io", kind: values.roleKind, name: values.roleName },
+        subjects: String(values.subjects || "").split("\n").map((line) => line.trim()).filter(Boolean).map((line) => {
+          const [subjectKind, name, namespace] = line.split("|")
+          return { kind: subjectKind, name, ...(namespace ? { namespace } : {}) }
+        }),
+      }),
+    })
+  }
+
+  if (["MutatingWebhookConfiguration", "ValidatingWebhookConfiguration"].includes(kind)) {
+    add({
+      id: "edit-webhook-policy",
+      label: "Edit Webhooks",
+      description: "Update admission webhook failure policy, match policy, timeout, and side effects.",
+      fields: [
+        { name: "failurePolicy", label: "Failure Policy", section: "Policy", type: "select", defaultValue: () => compactValue(asRecordList(resource.webhooks)[0]?.failurePolicy || "Fail"), options: [{ label: "Fail", value: "Fail" }, { label: "Ignore", value: "Ignore" }] },
+        { name: "matchPolicy", label: "Match Policy", section: "Policy", type: "select", defaultValue: () => compactValue(asRecordList(resource.webhooks)[0]?.matchPolicy || "Equivalent"), options: [{ label: "Equivalent", value: "Equivalent" }, { label: "Exact", value: "Exact" }] },
+        { name: "sideEffects", label: "Side Effects", section: "Policy", type: "select", defaultValue: () => compactValue(asRecordList(resource.webhooks)[0]?.sideEffects || "None"), options: [{ label: "None", value: "None" }, { label: "NoneOnDryRun", value: "NoneOnDryRun" }] },
+        { name: "timeoutSeconds", label: "Timeout Seconds", section: "Policy", type: "number", defaultValue: () => String(asRecordList(resource.webhooks)[0]?.timeoutSeconds || 10) },
+      ],
+      patch: (values) => ({
+        webhooks: asRecordList(resource.webhooks).map((webhook) => ({
+          ...webhook,
+          failurePolicy: values.failurePolicy,
+          matchPolicy: values.matchPolicy,
+          sideEffects: values.sideEffects,
+          timeoutSeconds: numberFromValue(values.timeoutSeconds, 10),
+        })),
+      }),
+    })
+  }
+
+  if (["ValidatingAdmissionPolicy", "ValidatingAdmissionPolicyBinding", "APIService", "CustomResourceDefinition", "FlowSchema", "PriorityLevelConfiguration", "RuntimeClass", "PriorityClass", "Namespace", "Lease"].includes(kind)) {
+    add({
+      id: "edit-control-plane",
+      label: `Edit ${kind}`,
+      description: `Update safe top-level spec fields for ${kind}.`,
+      fields: [{ name: "specFields", label: `${kind} Spec Fields`, section: "Spec", type: "textarea", defaultValue: () => "", placeholder: "topLevelSpecKey=value per line" }],
+      patch: specBasicsPatch,
+    })
+  }
+
+  if (canDeleteResource(config)) {
+    actions.push({
+      id: "delete-resource",
+      label: `Delete ${kind}`,
+      description: `Delete this ${kind}.`,
+      confirmLabel: "Delete",
+      variant: "destructive",
+      buildRequest: () => ({
+        url: resourceActionUrl(config, resource),
+        options: { method: "DELETE" },
+        navigateTo: config.path,
+      }),
+    })
+  }
+
+  return actions
 }
 
 const groupFields = (fields?: CreateFormField[]) => {
@@ -1060,8 +1809,9 @@ function FormField({ field, value, onChange }: { field: CreateFormField; value: 
 }
 
 export function ResourceCreateDialog({ config, onCreated }: { config: ResourceConfig; onCreated: () => void }) {
+  const createFields = useMemo(() => effectiveCreateFields(config), [config])
   const [open, setOpen] = useState(false)
-  const [values, setValues] = useState<Record<string, string | boolean>>(() => fieldDefaults(config.createFields))
+  const [values, setValues] = useState<Record<string, string | boolean>>(() => fieldDefaults(createFields))
   const [content, setContent] = useState("")
   const [advanced, setAdvanced] = useState(false)
   const [yamlEdited, setYamlEdited] = useState(false)
@@ -1069,10 +1819,10 @@ export function ResourceCreateDialog({ config, onCreated }: { config: ResourceCo
   const [error, setError] = useState("")
 
   const previewResource = useMemo(
-    () => config.buildCreateResource ? config.buildCreateResource(values) : templateResource(config, values),
+    () => buildEffectiveCreateResource(config, values),
     [config, values]
   )
-  const fieldGroups = useMemo(() => groupFields(config.createFields), [config.createFields])
+  const fieldGroups = useMemo(() => groupFields(createFields), [createFields])
 
   useEffect(() => {
     if (!yamlEdited) {
@@ -1083,12 +1833,12 @@ export function ResourceCreateDialog({ config, onCreated }: { config: ResourceCo
 
   useEffect(() => {
     if (!open) {
-      setValues(fieldDefaults(config.createFields))
+      setValues(fieldDefaults(createFields))
       setAdvanced(false)
       setYamlEdited(false)
       setError("")
     }
-  }, [config.createFields, open])
+  }, [createFields, open])
 
   const createResource = async () => {
     setSaving(true)
@@ -1130,7 +1880,7 @@ export function ResourceCreateDialog({ config, onCreated }: { config: ResourceCo
         if (!created) throw new Error(`${resource.kind || "Resource"} ${resource.metadata.name}: ${lastError || "Resource API is not served by this cluster"}`)
       }
       setOpen(false)
-      setValues(fieldDefaults(config.createFields))
+      setValues(fieldDefaults(createFields))
       setYamlEdited(false)
       onCreated()
     } catch (err) {
@@ -1407,7 +2157,7 @@ export function ResourceList({ config }: { config: ResourceConfig }) {
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input className="pl-9" placeholder={`Search ${config.title.toLowerCase()}...`} value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
-          {config.allowCreate !== false && <ResourceCreateDialog config={config} onCreated={load} />}
+          {canCreateResource(config) && <ResourceCreateDialog config={config} onCreated={load} />}
         </div>
       </div>
 
@@ -1475,7 +2225,7 @@ export function ResourceList({ config }: { config: ResourceConfig }) {
                         <div className="font-semibold text-foreground">{emptyTitle}</div>
                         <p className="mt-1 text-sm text-muted-foreground">{emptyDescription}</p>
                       </div>
-                      {config.allowCreate !== false && !search && <ResourceCreateDialog config={config} onCreated={load} />}
+                      {canCreateResource(config) && !search && <ResourceCreateDialog config={config} onCreated={load} />}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -1509,7 +2259,7 @@ export function ResourceList({ config }: { config: ResourceConfig }) {
                     {item.metadata.creationTimestamp || "N/A"}
                   </TableCell>
                   <TableCell className="h-9 px-3 py-1.5">
-                    {config.allowDelete !== false && (
+                    {canDeleteResource(config) && (
                       <Button
                         variant="ghost"
                         size="icon"
@@ -1614,6 +2364,10 @@ export function ResourceDetail({ config }: { config: ResourceConfig }) {
     ...(config.detailSections ? config.detailSections(resource) : []),
   ].filter((section) => section.items.length > 0)
   const relatedPods = relatedPodsForResource(resource)
+  const actions = [
+    ...(config.actions || []),
+    ...inferredResourceActions(config, resource).filter((action) => !(config.actions || []).some((existing) => existing.id === action.id)),
+  ]
 
   return (
     <div className="space-y-5 animate-in fade-in duration-500">
@@ -1628,9 +2382,9 @@ export function ResourceDetail({ config }: { config: ResourceConfig }) {
           </div>
           <p className="text-sm text-muted-foreground">{resource.metadata.namespace || "cluster scoped"}</p>
         </div>
-        {config.actions && config.actions.length > 0 && (
+        {actions.length > 0 && (
           <div className="flex flex-wrap justify-end gap-2">
-            {config.actions.map((action) => (
+            {actions.map((action) => (
               <ResourceActionDialog key={action.id} action={action} resource={resource} onComplete={reload} />
             ))}
           </div>
