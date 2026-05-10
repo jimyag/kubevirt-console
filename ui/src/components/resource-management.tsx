@@ -72,7 +72,7 @@ export type CreateFormField = {
 export type DetailSection = {
   title: string
   description?: string
-  items: Array<{ label: string; value: unknown }>
+  items: Array<{ label: string; value: unknown; fullWidth?: boolean }>
 }
 
 export type ResourceAction = {
@@ -153,15 +153,34 @@ const isPrimitiveDetailValue = (value: unknown) =>
 
 const conditionStatusVariant = (status?: unknown) => statusVariant(String(status || ""))
 
-function DetailValue({ value }: { value: unknown }) {
+const isRecordValue = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value)
+
+const isComplexDetailValue = (value: unknown) =>
+  Array.isArray(value) || isRecordValue(value)
+
+const detailObjectTitle = (value: Record<string, unknown>, fallback: string) => {
+  const title = value.name || value.type || value.action || value.protocol || value.kind || value.id
+  return isPrimitiveDetailValue(title) && title !== undefined && title !== null && title !== "" ? compactValue(title) : fallback
+}
+
+function DetailValue({ value, depth = 0 }: { value: unknown; depth?: number }) {
   if (isPrimitiveDetailValue(value)) {
     return <span>{compactValue(value)}</span>
+  }
+
+  if (depth > 4) {
+    return (
+      <pre className="max-h-56 max-w-full overflow-auto rounded-lg border bg-muted/30 p-3 text-xs text-foreground whitespace-pre-wrap break-words">
+        {YAML.dump(value, { noRefs: true, lineWidth: 120 })}
+      </pre>
+    )
   }
 
   if (Array.isArray(value)) {
     if (value.length === 0) return <span>None</span>
 
-    const conditionLike = value.every((item) => item && typeof item === "object" && "type" in (item as Record<string, unknown>))
+    const conditionLike = value.every((item) => isRecordValue(item) && "type" in item)
     if (conditionLike) {
       return (
         <div className="grid gap-2">
@@ -185,10 +204,40 @@ function DetailValue({ value }: { value: unknown }) {
       )
     }
 
+    const objectLike = value.every((item) => isRecordValue(item))
+    if (objectLike) {
+      return (
+        <div className="grid gap-2">
+          {value.slice(0, 12).map((item, index) => {
+            const record = item as Record<string, unknown>
+            const entries = Object.entries(record)
+            return (
+              <div key={index} className="min-w-0 max-w-full rounded-lg border bg-muted/30 px-3 py-2">
+                <div className="mb-2 min-w-0 break-words text-xs font-semibold text-foreground">
+                  {detailObjectTitle(record, `Item ${index + 1}`)}
+                </div>
+                <div className="grid min-w-0 gap-1.5">
+                  {entries.map(([key, nextValue]) => (
+                    <div key={key} className="grid min-w-0 gap-1 rounded-md border bg-background/40 px-2 py-1.5">
+                      <span className="min-w-0 break-all text-xs text-muted-foreground">{key}</span>
+                      <div className="min-w-0 break-words text-xs text-foreground">
+                        <DetailValue value={nextValue} depth={depth + 1} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          })}
+          {value.length > 12 && <span className="text-xs text-muted-foreground">+{value.length - 12} more</span>}
+        </div>
+      )
+    }
+
     return (
-      <div className="flex flex-wrap gap-1.5">
+      <div className="flex min-w-0 max-w-full flex-wrap gap-1.5">
         {value.slice(0, 12).map((item, index) => (
-          <span key={index} className="rounded-md border bg-muted px-2 py-1 text-xs text-foreground">
+          <span key={index} className="min-w-0 max-w-full break-words rounded-md border bg-muted px-2 py-1 text-xs text-foreground">
             {compactValue(item)}
           </span>
         ))}
@@ -201,14 +250,15 @@ function DetailValue({ value }: { value: unknown }) {
   if (entries.length === 0) return <span>None</span>
 
   return (
-    <div className="grid gap-1.5">
-      {entries.slice(0, 12).map(([key, nextValue]) => (
-        <div key={key} className="grid gap-1 rounded-md border bg-muted/30 px-2 py-1.5 sm:grid-cols-[minmax(8rem,14rem)_minmax(0,1fr)]">
+    <div className="grid min-w-0 max-w-full gap-1.5">
+      {entries.map(([key, nextValue]) => (
+        <div key={key} className="grid min-w-0 max-w-full gap-1 rounded-md border bg-muted/30 px-2 py-1.5">
           <span className="min-w-0 break-all text-xs text-muted-foreground">{key}</span>
-          <span className="min-w-0 break-words text-xs text-foreground">{compactValue(nextValue)}</span>
+          <div className="min-w-0 break-words text-xs text-foreground">
+            <DetailValue value={nextValue} depth={depth + 1} />
+          </div>
         </div>
       ))}
-      {entries.length > 12 && <span className="text-xs text-muted-foreground">+{entries.length - 12} more fields</span>}
     </div>
   )
 }
@@ -905,14 +955,20 @@ export function ResourceDetail({ config }: { config: ResourceConfig }) {
             </CardHeader>
             <CardContent className="pt-0">
               <dl className="divide-y">
-                {section.items.map((item) => (
-                  <div key={item.label} className="grid gap-1 py-2 md:grid-cols-[8rem_minmax(0,1fr)] md:items-start md:gap-3">
-                    <dt className="min-w-0 break-all text-xs font-medium text-muted-foreground">{item.label}</dt>
+                {section.items.map((item) => {
+                  const wide = item.fullWidth || isComplexDetailValue(item.value)
+                  return (
+                  <div key={item.label} className={cn(
+                    "grid min-w-0 gap-1 py-2",
+                    wide ? "" : "md:grid-cols-[8rem_minmax(0,1fr)] md:items-start md:gap-3"
+                  )}>
+                    <dt className="min-w-0 break-words text-xs font-medium text-muted-foreground">{item.label}</dt>
                     <dd className="min-w-0 break-words text-sm text-foreground">
                       <DetailValue value={item.value} />
                     </dd>
                   </div>
-                ))}
+                  )
+                })}
               </dl>
             </CardContent>
           </Card>

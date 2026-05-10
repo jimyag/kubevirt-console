@@ -1,0 +1,51 @@
+import type { ResourceConfig } from "@/components/resource-management";
+import * as shared from "./shared";
+
+export const csinodesConfig: ResourceConfig = {
+    id: "csinodes",
+    path: "/storage/kubernetes/csi-nodes",
+    title: "CSI Nodes",
+    subtitle: "Manage Kubernetes CSINode driver node registrations",
+    listPath: "/apis/storage.k8s.io/v1/csinodes",
+    namespaced: false,
+    resourcePath: "/apis/storage.k8s.io/v1",
+    kind: "CSINode",
+    createFields: [
+      ...shared.nameOnlyFields("example-node"),
+      { name: "driverName", label: "Driver Name", section: "Driver", defaultValue: "example.csi.io" },
+      { name: "nodeID", label: "Node ID", section: "Driver", defaultValue: "example-node" },
+      { name: "topologyKeys", label: "Topology Keys", section: "Topology", defaultValue: "", placeholder: "topology.kubernetes.io/zone" },
+      { name: "allocatableCount", label: "Allocatable Count", section: "Driver", type: "number", defaultValue: "0" },
+    ],
+    buildCreateResource: (values) => {
+      const allocatableCount = shared.numberValue(values.allocatableCount, 0);
+      return {
+        apiVersion: "storage.k8s.io/v1",
+        kind: "CSINode",
+        metadata: { name: shared.stringValue(values.name, "example-node") },
+        spec: {
+          drivers: [{
+            name: shared.stringValue(values.driverName, "example.csi.io"),
+            nodeID: shared.stringValue(values.nodeID, "example-node"),
+            ...(shared.csvList(values.topologyKeys).length ? { topologyKeys: shared.csvList(values.topologyKeys) } : {}),
+            ...(allocatableCount > 0 ? { allocatable: { count: allocatableCount } } : {}),
+          }],
+        },
+      };
+    },
+    statusPath: ["spec", "drivers", "0", "name"],
+    detailSections: shared.csiNodeDetailSections,
+    extraColumns: [
+      { label: "Drivers", value: (r) => String((shared.getRecord(r.spec).drivers as unknown[] | undefined)?.length || 0) },
+      { label: "First Driver", value: (r) => String(((shared.getRecord(r.spec).drivers as any[] | undefined)?.[0]?.name) || "N/A") },
+    ],
+    createTemplate: `apiVersion: storage.k8s.io/v1
+kind: CSINode
+metadata:
+  name: example-node
+spec:
+  drivers:
+    - name: example.csi.io
+      nodeID: example-node
+`,
+  };

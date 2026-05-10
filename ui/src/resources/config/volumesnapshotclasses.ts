@@ -1,0 +1,41 @@
+import type { ResourceConfig } from "@/components/resource-management";
+import * as shared from "./shared";
+
+export const volumesnapshotclassesConfig: ResourceConfig = {
+    id: "volumesnapshotclasses",
+    path: "/storage/kubernetes/volume-snapshot-classes",
+    title: "Volume Snapshot Classes",
+    subtitle: "Manage CSI VolumeSnapshotClass driver configuration",
+    listPath: "/apis/snapshot.storage.k8s.io/v1/volumesnapshotclasses",
+    namespaced: false,
+    resourcePath: "/apis/snapshot.storage.k8s.io/v1",
+    kind: "VolumeSnapshotClass",
+    createFields: [
+      ...shared.nameOnlyFields("example-snapshot-class"),
+      { name: "driver", label: "Driver", section: "Driver", defaultValue: "example.csi.io" },
+      { name: "deletionPolicy", label: "Deletion Policy", section: "Policy", type: "select", defaultValue: "Delete", options: [{ label: "Delete", value: "Delete" }, { label: "Retain", value: "Retain" }] },
+      { name: "parameters", label: "Parameters", section: "Driver", type: "textarea", defaultValue: "", placeholder: "key=value" },
+    ],
+    buildCreateResource: (values) => ({
+      apiVersion: "snapshot.storage.k8s.io/v1",
+      kind: "VolumeSnapshotClass",
+      metadata: { name: shared.stringValue(values.name, "example-snapshot-class") },
+      driver: shared.stringValue(values.driver, "example.csi.io"),
+      deletionPolicy: shared.stringValue(values.deletionPolicy, "Delete"),
+      parameters: shared.parseKeyValueText(shared.stringValue(values.parameters)),
+    }),
+    statusPath: ["driver"],
+    detailSections: shared.volumeSnapshotClassDetailSections,
+    extraColumns: [
+      { label: "Driver", value: (r) => String((r as any).driver || "N/A") },
+      { label: "Deletion", value: (r) => String((r as any).deletionPolicy || "N/A") },
+    ],
+    createTemplate: `apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: example-snapshot-class
+driver: example.csi.io
+deletionPolicy: Delete
+parameters: {}
+`,
+  };

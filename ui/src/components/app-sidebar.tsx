@@ -1,18 +1,12 @@
 import { useEffect, useState } from "react"
 import {
-  Boxes,
-  Camera,
   Cpu,
   Globe,
   HardDrive,
-  KeyRound,
   LayoutDashboard,
   Network,
-  Route,
-  Scale,
   Server,
   Terminal,
-  Undo2,
 } from "lucide-react"
 import { Link, useLocation } from "react-router-dom"
 
@@ -33,17 +27,10 @@ const setContext = (ctx: string) => localStorage.setItem("kube-context", ctx)
 
 const navItems = [
   { name: "Overview", path: "/", icon: LayoutDashboard },
-  { name: "Machines", path: "/vms", icon: Cpu },
-  { name: "Storage", path: "/dvs", icon: HardDrive },
-  { name: "VM Pools", path: "/vmpools", icon: Boxes },
+  { name: "KubeVirt", path: "/kubevirt", icon: Cpu },
+  { name: "Storage", path: "/storage", icon: HardDrive },
   { name: "Nodes", path: "/nodes", icon: Server },
   { name: "Networks", path: "/networks", icon: Network },
-  { name: "Load Balancers", path: "/load-balancers", icon: Route },
-  { name: "Instance Types", path: "/instance-types", icon: Cpu },
-  { name: "Snapshots", path: "/snapshots", icon: Camera },
-  { name: "Restores", path: "/restores", icon: Undo2 },
-  { name: "SSH Keys", path: "/ssh-keys", icon: KeyRound },
-  { name: "Autoscaling", path: "/autoscaling", icon: Scale },
 ]
 
 export function AppSidebar() {
